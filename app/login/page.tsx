@@ -30,7 +30,7 @@ export default async function LoginPage() {
         href="https://github.com/sanjaibalajee/weebsworldxplorers"
         target="_blank"
         rel="noopener noreferrer"
-        className="mt-6 flex items-center gap-2 text-white/70 hover:text-white transition-colors text-sm"
+        className="mt-6 flex items-center gap-2 text-black/70 hover:text-black transition-colors text-sm"
       >
         <svg
           className="w-5 h-5"
