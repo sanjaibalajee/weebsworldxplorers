@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { DashboardHeader } from "./dashboard-header";
 import { GlobalStats } from "./global-stats";
 import { BalanceCards } from "./balance-cards";
+import { QuickActions } from "./quick-actions";
 import { ExpenseTimeline } from "./expense-timeline";
 import { FloatingActions } from "./floating-actions";
 import { WalletSetupModal } from "@/components/wallet/wallet-setup-modal";
@@ -72,6 +73,8 @@ export function DashboardContent({
           owedByMe={balances.owedByMe}
           walletBalance={balances.walletBalance}
         />
+
+        <QuickActions />
 
         <ExpenseTimeline expenses={recentExpenses} />
 
