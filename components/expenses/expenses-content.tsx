@@ -9,7 +9,7 @@ type Expense = {
   id: string;
   title: string;
   totalAmount: number;
-  date: string;
+  date: string | null;
   type: "group" | "individual";
   createdAt: string;
   paidBy: string;
