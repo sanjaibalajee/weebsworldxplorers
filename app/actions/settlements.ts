@@ -603,6 +603,12 @@ export async function getDetailedBalances() {
       // Only show unsettled expenses
       const unsettledExpenses = details.expenses.filter(e => !e.isSettled);
 
+      // For expenses, keep the sign relative to the overall relationship:
+      // - In "owedToYou": positive amount = they owe you more, negative = reduces what they owe
+      // - In "owedByYou": positive amount = you owe them more, negative = reduces what you owe
+      // Since details.netAmount determines the category, we need to flip signs for owedByYou
+      const isOwedToYou = details.netAmount > 0;
+
       const person: PersonBalance = {
         userId,
         name: userMap.get(userId) || "Unknown",
@@ -610,7 +616,11 @@ export async function getDetailedBalances() {
         expenses: unsettledExpenses.map(e => ({
           id: e.id,
           title: e.title,
-          amount: Math.abs(e.amount),
+          // For owedByYou, flip the sign so positive = increases debt, negative = reduces debt
+          // e.amount is positive when they owe me, negative when I owe them
+          // In owedByYou context: if e.amount > 0 (they owe me), it REDUCES my debt (show negative)
+          // In owedByYou context: if e.amount < 0 (I owe them), it INCREASES my debt (show positive)
+          amount: isOwedToYou ? Math.abs(e.amount) : -e.amount,
           total: e.total,
           date: e.date,
           paidBy: e.paidBy,
@@ -633,14 +643,15 @@ export async function getDetailedBalances() {
     for (const p of owedToYou) {
       console.log("  ", p.name, "owes you", p.netAmount);
       for (const e of p.expenses) {
-        console.log("    - Expense:", e.id, e.title, "Amount:", e.amount);
+        console.log("    - Expense:", e.id, e.title, "Amount:", e.amount > 0 ? `+${e.amount}` : e.amount);
       }
     }
     console.log("Owed BY you:");
     for (const p of owedByYou) {
       console.log("  You owe", p.name, p.netAmount);
       for (const e of p.expenses) {
-        console.log("    - Expense:", e.id, e.title, "Amount:", e.amount);
+        // Positive = increases your debt, Negative = reduces your debt (they owe you for this one)
+        console.log("    - Expense:", e.id, e.title, "Amount:", e.amount > 0 ? `+${e.amount}` : e.amount, e.amount < 0 ? "(reduces debt)" : "");
       }
     }
     console.log("=== END DETAILED BALANCES ===\n");

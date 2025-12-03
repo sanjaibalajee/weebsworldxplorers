@@ -103,6 +103,9 @@ export function BalanceCard({
           <div className="space-y-1">
             {person.expenses.map((expense) => {
               const displayAmount = Math.abs(expense.amount);
+              // For "owedByYou" cards: positive = increases debt, negative = reduces debt
+              // For "owedToYou" cards: all amounts are positive (they owe you)
+              const isReducingDebt = !owesYou && expense.amount < 0;
               return (
                 <button
                   key={expense.id}
@@ -116,16 +119,19 @@ export function BalanceCard({
                     </div>
                     <p className="text-[10px] text-muted-foreground">
                       {expense.date} • Paid by {expense.paidBy}
+                      {isReducingDebt && " • reduces debt"}
                     </p>
                   </div>
                   <p
                     className={`text-sm font-semibold ml-3 ${
-                      owesYou
+                      isReducingDebt
                         ? "text-green-600 dark:text-green-400"
-                        : "text-red-600 dark:text-red-400"
+                        : owesYou
+                          ? "text-green-600 dark:text-green-400"
+                          : "text-red-600 dark:text-red-400"
                     }`}
                   >
-                    {owesYou ? "+" : "-"}฿{displayAmount.toLocaleString()}
+                    {isReducingDebt ? "+" : owesYou ? "+" : "-"}฿{displayAmount.toLocaleString()}
                   </p>
                 </button>
               );

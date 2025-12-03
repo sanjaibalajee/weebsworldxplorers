@@ -587,65 +587,13 @@ export async function getBalances() {
   }
 
   try {
-    // Get all expenses with payers and splits
-    const allExpenses = await db.query.expenses.findMany({
-      with: {
-        payers: true,
-        splits: true,
-      },
-    });
+    // Import getDetailedBalances to get per-person balances (same logic as settle page)
+    const { getDetailedBalances } = await import("./settlements");
+    const { owedToYou, owedByYou } = await getDetailedBalances();
 
-    // Filter to group expenses only (exclude pot and individual - pot expenses don't create owe relationships)
-    const groupExpenses = allExpenses.filter((e) => e.type === "group");
-
-    // Calculate net balance per person
-    const balanceMap = new Map<string, number>();
-
-    for (const expense of groupExpenses) {
-      // What each person paid
-      for (const payer of expense.payers) {
-        if (!payer.userId) continue;
-        const netPaid = parseFloat(payer.cashGiven || "0") - parseFloat(payer.changeTaken || "0");
-        const current = balanceMap.get(payer.userId) || 0;
-        balanceMap.set(payer.userId, current + netPaid);
-      }
-
-      // What each person owes
-      for (const split of expense.splits) {
-        if (!split.userId) continue;
-        const owed = parseFloat(split.owedAmountThb);
-        const current = balanceMap.get(split.userId) || 0;
-        balanceMap.set(split.userId, current - owed);
-      }
-    }
-
-    // Get settlements
-    const allSettlements = await db.query.settlements.findMany();
-
-    for (const settlement of allSettlements) {
-      const amount = parseFloat(settlement.amountThbEquivalent);
-      if (settlement.payerId) {
-        const current = balanceMap.get(settlement.payerId) || 0;
-        balanceMap.set(settlement.payerId, current + amount);
-      }
-      if (settlement.receiverId) {
-        const current = balanceMap.get(settlement.receiverId) || 0;
-        balanceMap.set(settlement.receiverId, current - amount);
-      }
-    }
-
-    // Calculate owed to me and owed by me relative to current user
-    const myBalance = balanceMap.get(currentUser.id) || 0;
-
-    // Positive balance means others owe me, negative means I owe others
-    let owedToMe = 0;
-    let owedByMe = 0;
-
-    if (myBalance > 0) {
-      owedToMe = myBalance;
-    } else {
-      owedByMe = Math.abs(myBalance);
-    }
+    // Sum up all unique per-person balances
+    const owedToMe = owedToYou.reduce((sum, person) => sum + person.netAmount, 0);
+    const owedByMe = owedByYou.reduce((sum, person) => sum + person.netAmount, 0);
 
     // Get wallet balance from transactions
     const walletBalance = await getWalletBalance();
