@@ -115,7 +115,7 @@ export const walletTransactions = pgTable("wallet_transactions", {
 
 // Relations
 
-export const usersRelations = relations(users, ({ many }) => ({
+export const usersRelations = relations(users, ({ one, many }) => ({
   walletTopups: many(walletTopups),
   walletTransactions: many(walletTransactions, { relationName: "user" }),
   walletTransactionsAsCounterparty: many(walletTransactions, { relationName: "counterparty" }),
@@ -124,6 +124,12 @@ export const usersRelations = relations(users, ({ many }) => ({
   expenseSplits: many(expenseSplits),
   settlementsAsPayer: many(settlements, { relationName: "payer" }),
   settlementsAsReceiver: many(settlements, { relationName: "receiver" }),
+  pot: one(userPots, {
+    fields: [users.id],
+    references: [userPots.userId],
+  }),
+  potTransactions: many(potTransactions, { relationName: "potUser" }),
+  potTransactionsCreated: many(potTransactions, { relationName: "potCreator" }),
 }));
 
 export const walletTopupsRelations = relations(walletTopups, ({ one }) => ({
@@ -199,5 +205,48 @@ export const walletTransactionsRelations = relations(walletTransactions, ({ one 
     fields: [walletTransactions.counterpartyId],
     references: [users.id],
     relationName: "counterparty",
+  }),
+}));
+
+// Pot system tables
+export const userPots = pgTable("user_pots", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }).unique(),
+  balance: numeric("balance", { precision: 10, scale: 2 }).default("0"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+export const potTransactions = pgTable("pot_transactions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
+  type: varchar("type", { length: 20 }).notNull(), // 'contribution', 'expense', 'refund'
+  amountThb: numeric("amount_thb", { precision: 10, scale: 2 }).notNull(),
+  balanceAfter: numeric("balance_after", { precision: 10, scale: 2 }).notNull(),
+  referenceId: uuid("reference_id"), // expense_id if type is expense
+  referenceType: varchar("reference_type", { length: 20 }), // 'expense', 'topup'
+  description: varchar("description", { length: 255 }),
+  createdBy: uuid("created_by").references(() => users.id), // admin who initiated
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
+// Pot relations
+export const userPotsRelations = relations(userPots, ({ one }) => ({
+  user: one(users, {
+    fields: [userPots.userId],
+    references: [users.id],
+  }),
+}));
+
+export const potTransactionsRelations = relations(potTransactions, ({ one }) => ({
+  user: one(users, {
+    fields: [potTransactions.userId],
+    references: [users.id],
+    relationName: "potUser",
+  }),
+  createdByUser: one(users, {
+    fields: [potTransactions.createdBy],
+    references: [users.id],
+    relationName: "potCreator",
   }),
 }));

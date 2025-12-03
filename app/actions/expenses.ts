@@ -1,10 +1,11 @@
 "use server";
 
 import { db } from "@/app/db/drizzle";
-import { expenses, expensePayers, expenseSplits, users, walletTransactions } from "@/app/db/schema";
+import { expenses, expensePayers, expenseSplits, users, walletTransactions, potTransactions, userPots } from "@/app/db/schema";
 import { eq, desc, and } from "drizzle-orm";
 import { getCurrentUser } from "./auth";
 import { recordExpensePaymentForUser, getWalletBalance } from "./wallet";
+import { deductFromPot, isAdmin } from "./pot";
 
 type PayerInput = {
   userId: string;
@@ -22,7 +23,7 @@ type CreateExpenseInput = {
   title: string;
   totalAmount: number;
   date: string;
-  type: "group" | "individual";
+  type: "group" | "individual" | "pot";
   payers: PayerInput[];
   splits: SplitInput[];
 };
@@ -31,6 +32,14 @@ export async function createExpense(input: CreateExpenseInput) {
   const currentUser = await getCurrentUser();
   if (!currentUser) {
     return { success: false, error: "Not authenticated" };
+  }
+
+  // Pot expenses can only be created by admin
+  if (input.type === "pot") {
+    const admin = await isAdmin();
+    if (!admin) {
+      return { success: false, error: "Only admin can create pot expenses" };
+    }
   }
 
   try {
@@ -46,8 +55,17 @@ export async function createExpense(input: CreateExpenseInput) {
       })
       .returning();
 
-    // Create payers
-    if (input.payers.length > 0) {
+    // For pot expenses, admin is the payer (no cash flow tracking needed)
+    if (input.type === "pot") {
+      // Add admin as the single payer
+      await db.insert(expensePayers).values({
+        expenseId: expense.id,
+        userId: currentUser.id,
+        cashGiven: input.totalAmount.toString(),
+        changeTaken: "0",
+      });
+    } else if (input.payers.length > 0) {
+      // Create payers for regular expenses
       await db.insert(expensePayers).values(
         input.payers.map((payer) => ({
           expenseId: expense.id,
@@ -70,11 +88,24 @@ export async function createExpense(input: CreateExpenseInput) {
       );
     }
 
-    // Record wallet transaction for ALL payers (deduct from their wallet)
-    for (const payer of input.payers) {
-      const netPaid = payer.cashGiven - payer.changeTaken;
-      if (netPaid > 0) {
-        await recordExpensePaymentForUser(expense.id, netPaid, input.title, payer.userId);
+    // Handle pot expenses - deduct from each person's pot
+    if (input.type === "pot") {
+      for (const split of input.splits) {
+        await deductFromPot(
+          split.userId,
+          split.owedAmount,
+          expense.id,
+          input.title,
+          currentUser.id
+        );
+      }
+    } else {
+      // Record wallet transaction for ALL payers (deduct from their wallet)
+      for (const payer of input.payers) {
+        const netPaid = payer.cashGiven - payer.changeTaken;
+        if (netPaid > 0) {
+          await recordExpensePaymentForUser(expense.id, netPaid, input.title, payer.userId);
+        }
       }
     }
 
@@ -196,7 +227,7 @@ export async function getExpense(id: string) {
       title: expense.title,
       totalAmount: parseFloat(expense.totalAmountThb),
       date: expense.expenseDate,
-      type: expense.type as "group" | "individual",
+      type: expense.type as "group" | "individual" | "pot",
       createdBy: expense.createdBy?.name || "Unknown",
       createdAt: expense.createdAt?.toISOString() || "",
       payers: expense.payers.map((p) => ({
@@ -218,7 +249,7 @@ export async function getExpense(id: string) {
   }
 }
 
-export async function getExpenses(type?: "group" | "individual", onlyMine?: boolean) {
+export async function getExpenses(type?: "group" | "individual" | "pot", onlyMine?: boolean) {
   const currentUser = await getCurrentUser();
   if (!currentUser) {
     return [];
@@ -255,7 +286,8 @@ export async function getExpenses(type?: "group" | "individual", onlyMine?: bool
     // If onlyMine is true, only show expenses where user is involved
     const filtered = allExpenses.filter((expense) => {
       // For individual expenses, only show if created by current user
-      if (expense.type === "individual" && expense.createdBy !== currentUser.id) {
+      // Note: createdBy is an object from relation, so we check createdBy.id
+      if (expense.type === "individual" && expense.createdBy?.id !== currentUser.id) {
         return false;
       }
       // If onlyMine filter is on, only show expenses where user paid or is in split
@@ -276,7 +308,7 @@ export async function getExpenses(type?: "group" | "individual", onlyMine?: bool
         title: expense.title,
         totalAmount: parseFloat(expense.totalAmountThb),
         date: expense.expenseDate,
-        type: expense.type as "group" | "individual",
+        type: expense.type as "group" | "individual" | "pot",
         createdAt: expense.createdAt?.toISOString() || "",
         paidBy: primaryPayer?.user?.name || "Unknown",
         splitBetween: expense.splits.length,
@@ -317,9 +349,9 @@ export async function getRecentExpenses(limit: number = 5) {
       },
     });
 
-    // Filter: show all group expenses, but only current user's individual expenses
+    // Filter: show all group/pot expenses, but only current user's individual expenses
     const filtered = recentExpenses.filter((expense) => {
-      if (expense.type === "group") return true;
+      if (expense.type === "group" || expense.type === "pot") return true;
       // For individual expenses, only show if created by current user
       return expense.createdBy === currentUser.id;
     }).slice(0, limit);
@@ -364,7 +396,7 @@ export async function getRecentExpenses(limit: number = 5) {
         yourShare: yourSplit ? parseFloat(yourSplit.owedAmountThb) : 0,
         paidBy: primaryPayer?.user?.name || "Unknown",
         date: dateStr,
-        type: expense.type as "group" | "individual",
+        type: expense.type as "group" | "individual" | "pot",
       };
     });
   } catch (error) {
@@ -412,14 +444,14 @@ export async function getDashboardStats() {
       },
     });
 
-    let groupTotal = 0; // Total of all group expenses
+    let groupTotal = 0; // Total of all group expenses (including pot)
     let yourSpend = 0;  // Your share across all expenses
 
     for (const expense of allExpenses) {
       const expenseTotal = parseFloat(expense.totalAmountThb);
 
-      // Add to group total if it's a group expense
-      if (expense.type === "group") {
+      // Add to group total if it's a group or pot expense
+      if (expense.type === "group" || expense.type === "pot") {
         groupTotal += expenseTotal;
       }
 
@@ -455,7 +487,7 @@ export async function getBalances() {
       },
     });
 
-    // Filter to group expenses in memory (avoids DB column issue during migration)
+    // Filter to group expenses only (exclude pot and individual - pot expenses don't create owe relationships)
     const groupExpenses = allExpenses.filter((e) => e.type === "group");
 
     // Calculate net balance per person

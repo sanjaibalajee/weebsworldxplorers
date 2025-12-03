@@ -24,6 +24,7 @@ type Balances = {
   owedToMe: number;
   owedByMe: number;
   walletBalance: number;
+  potBalance: number;
 };
 
 type Expense = {
@@ -72,6 +73,7 @@ export function DashboardContent({
           owedToMe={balances.owedToMe}
           owedByMe={balances.owedByMe}
           walletBalance={balances.walletBalance}
+          potBalance={balances.potBalance}
         />
 
         <QuickActions />

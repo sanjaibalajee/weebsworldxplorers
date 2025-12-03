@@ -15,12 +15,13 @@ import {
   TrendingDown,
   X,
   Loader2,
+  PiggyBank,
 } from "lucide-react";
 import { createTopup } from "@/app/actions/wallet";
 
 type Transaction = {
   id: string;
-  type: "topup" | "expense_paid" | "settlement_sent" | "settlement_received";
+  type: "topup" | "expense_paid" | "settlement_sent" | "settlement_received" | "pot_contribution";
   amount: number;
   balanceAfter: number;
   description: string | null;
@@ -67,6 +68,13 @@ const transactionConfig = {
     bgColor: "bg-green-500/10",
     label: "Received",
     sign: "+",
+  },
+  pot_contribution: {
+    icon: PiggyBank,
+    color: "text-amber-600 dark:text-amber-400",
+    bgColor: "bg-amber-500/10",
+    label: "Pot Contribution",
+    sign: "",
   },
 };
 

@@ -1,14 +1,16 @@
 "use client";
 
-import { useState, useMemo, useTransition } from "react";
+import { useState, useMemo, useTransition, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, Users, User, Check, Loader2 } from "lucide-react";
+import { ChevronLeft, Users, User, Check, Loader2, PiggyBank } from "lucide-react";
 import { CashFlowWidget } from "./cash-flow-widget";
 import { SplitWidget } from "./split-widget";
 import { createExpense } from "@/app/actions/expenses";
 
 type User = { id: string; name: string };
+
+type UserWithPot = { id: string; name: string; potBalance: number };
 
 type Payer = {
   id: string;
@@ -25,16 +27,25 @@ type Split = {
 type AddExpenseFormProps = {
   currentUser: User;
   users: User[];
+  isAdmin?: boolean;
+  usersWithPots?: UserWithPot[];
+  initialType?: "pot";
 };
 
-type ExpenseType = "group" | "individual" | null;
+type ExpenseType = "group" | "individual" | "pot" | null;
 
-export function AddExpenseForm({ currentUser, users }: AddExpenseFormProps) {
+export function AddExpenseForm({
+  currentUser,
+  users,
+  isAdmin = false,
+  usersWithPots = [],
+  initialType,
+}: AddExpenseFormProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
   // Expense type selection
-  const [expenseType, setExpenseType] = useState<ExpenseType>(null);
+  const [expenseType, setExpenseType] = useState<ExpenseType>(initialType || null);
 
   // Form state
   const [title, setTitle] = useState("");
@@ -59,11 +70,17 @@ export function AddExpenseForm({ currentUser, users }: AddExpenseFormProps) {
     new Set(users.map((u) => u.id))
   );
 
+  // Filter out admin from users for pot expenses
+  const nonAdminUsers = users.filter((u) => u.name.toLowerCase() !== "admin");
+
   // When switching to individual, select only current user
   const handleTypeSelect = (type: ExpenseType) => {
     setExpenseType(type);
     if (type === "individual") {
       setSelectedUserIds(new Set([currentUser.id]));
+    } else if (type === "pot") {
+      // For pot expenses, select all non-admin users
+      setSelectedUserIds(new Set(nonAdminUsers.map((u) => u.id)));
     } else {
       setSelectedUserIds(new Set(users.map((u) => u.id)));
     }
@@ -98,6 +115,11 @@ export function AddExpenseForm({ currentUser, users }: AddExpenseFormProps) {
       return basicValid;
     }
 
+    if (expenseType === "pot") {
+      // Pot expenses just need basic validation + at least one person selected
+      return basicValid && selectedUserIds.size > 0 && totalShares > 0;
+    }
+
     // Group expenses need full validation
     return (
       basicValid &&
@@ -112,26 +134,42 @@ export function AddExpenseForm({ currentUser, users }: AddExpenseFormProps) {
 
     startTransition(async () => {
       // For individual expense, set current user as the only payer and split
-      const finalPayers = expenseType === "individual"
-        ? [{ userId: currentUser.id, cashGiven: totalAmount, changeTaken: 0 }]
-        : payers.map((p) => ({
-            userId: p.userId,
-            cashGiven: p.cashGiven,
-            changeTaken: p.changeTaken,
-          }));
+      let finalPayers: { userId: string; cashGiven: number; changeTaken: number }[];
+      let finalSplits: { userId: string; shares: number; owedAmount: number }[];
 
-      const finalSplits = expenseType === "individual"
-        ? [{ userId: currentUser.id, shares: 1, owedAmount: totalAmount }]
-        : splits
-            .filter((s) => selectedUserIds.has(s.userId))
-            .map((s) => {
-              const shareAmount = (s.shares / totalShares) * totalAmount;
-              return {
-                userId: s.userId,
-                shares: s.shares,
-                owedAmount: Math.round(shareAmount * 100) / 100,
-              };
-            });
+      if (expenseType === "individual") {
+        finalPayers = [{ userId: currentUser.id, cashGiven: totalAmount, changeTaken: 0 }];
+        finalSplits = [{ userId: currentUser.id, shares: 1, owedAmount: totalAmount }];
+      } else if (expenseType === "pot") {
+        // For pot expenses, admin is the payer (handled on server)
+        finalPayers = [];
+        finalSplits = splits
+          .filter((s) => selectedUserIds.has(s.userId))
+          .map((s) => {
+            const shareAmount = (s.shares / totalShares) * totalAmount;
+            return {
+              userId: s.userId,
+              shares: s.shares,
+              owedAmount: Math.round(shareAmount * 100) / 100,
+            };
+          });
+      } else {
+        finalPayers = payers.map((p) => ({
+          userId: p.userId,
+          cashGiven: p.cashGiven,
+          changeTaken: p.changeTaken,
+        }));
+        finalSplits = splits
+          .filter((s) => selectedUserIds.has(s.userId))
+          .map((s) => {
+            const shareAmount = (s.shares / totalShares) * totalAmount;
+            return {
+              userId: s.userId,
+              shares: s.shares,
+              owedAmount: Math.round(shareAmount * 100) / 100,
+            };
+          });
+      }
 
       const result = await createExpense({
         title,
@@ -143,7 +181,7 @@ export function AddExpenseForm({ currentUser, users }: AddExpenseFormProps) {
       });
 
       if (result.success) {
-        router.push("/dashboard");
+        router.push(isAdmin ? "/admin" : "/dashboard");
       } else {
         console.error("Failed to create expense:", result.error);
       }
@@ -174,7 +212,7 @@ export function AddExpenseForm({ currentUser, users }: AddExpenseFormProps) {
             Choose how this expense should be tracked
           </p>
 
-          <div className="grid grid-cols-2 gap-4 pt-4">
+          <div className={`grid gap-4 pt-4 ${isAdmin ? "grid-cols-3" : "grid-cols-2"}`}>
             <button
               onClick={() => handleTypeSelect("group")}
               className="flex flex-col items-center gap-3 p-6 rounded-2xl border-2 border-transparent bg-blue-500/5 hover:border-blue-500/30 hover:bg-blue-500/10 transition-all"
@@ -204,6 +242,23 @@ export function AddExpenseForm({ currentUser, users }: AddExpenseFormProps) {
                 </p>
               </div>
             </button>
+
+            {isAdmin && (
+              <button
+                onClick={() => handleTypeSelect("pot")}
+                className="flex flex-col items-center gap-3 p-6 rounded-2xl border-2 border-transparent bg-amber-500/5 hover:border-amber-500/30 hover:bg-amber-500/10 transition-all"
+              >
+                <div className="w-16 h-16 rounded-full bg-amber-500/10 flex items-center justify-center">
+                  <PiggyBank className="w-8 h-8 text-amber-500" />
+                </div>
+                <div className="text-center">
+                  <p className="font-semibold">Pot</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    From group pot
+                  </p>
+                </div>
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -228,6 +283,10 @@ export function AddExpenseForm({ currentUser, users }: AddExpenseFormProps) {
             {expenseType === "group" ? (
               <>
                 <Users className="w-3.5 h-3.5" /> Group expense
+              </>
+            ) : expenseType === "pot" ? (
+              <>
+                <PiggyBank className="w-3.5 h-3.5" /> Pot expense
               </>
             ) : (
               <>
@@ -286,8 +345,8 @@ export function AddExpenseForm({ currentUser, users }: AddExpenseFormProps) {
         </div>
       </div>
 
-      {/* Cash Flow Widget - show for both but simpler for individual */}
-      {expenseType === "group" ? (
+      {/* Cash Flow Widget - show for group only */}
+      {expenseType === "group" && (
         <CashFlowWidget
           users={users}
           payers={payers}
@@ -296,7 +355,10 @@ export function AddExpenseForm({ currentUser, users }: AddExpenseFormProps) {
           netCashPaid={netCashPaid}
           cashDifference={cashDifference}
         />
-      ) : (
+      )}
+
+      {/* Individual - simple payment display */}
+      {expenseType === "individual" && (
         <div className="space-y-3">
           <h2 className="text-sm font-semibold">Payment</h2>
           <div className="bg-muted/50 rounded-lg p-4">
@@ -308,16 +370,31 @@ export function AddExpenseForm({ currentUser, users }: AddExpenseFormProps) {
         </div>
       )}
 
-      {/* Split Widget - only show for group */}
-      {expenseType === "group" && (
+      {/* Pot - show pot balances and split */}
+      {expenseType === "pot" && (
+        <div className="space-y-3">
+          <h2 className="text-sm font-semibold">From Group Pot</h2>
+          <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+            <p className="text-xs text-muted-foreground">
+              This expense will be deducted from each person's pot balance.
+              No owe relationships will be created.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Split Widget - show for group and pot */}
+      {(expenseType === "group" || expenseType === "pot") && (
         <SplitWidget
-          users={users}
+          users={expenseType === "pot" ? nonAdminUsers : users}
           splits={splits}
           setSplits={setSplits}
           selectedUserIds={selectedUserIds}
           setSelectedUserIds={setSelectedUserIds}
           totalAmount={totalAmount === "" ? 0 : totalAmount}
           totalShares={totalShares}
+          showPotBalance={expenseType === "pot"}
+          usersWithPots={usersWithPots}
         />
       )}
 

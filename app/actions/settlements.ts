@@ -468,9 +468,9 @@ export async function getDetailedBalances() {
       },
     });
 
-    // Filter to only group expenses
+    // Filter to only group expenses (exclude pot and individual - they don't create owe relationships)
     const filteredExpenses = groupExpenses.filter((e) => e.type === "group");
-    console.log("Group expenses found:", filteredExpenses.length);
+    console.log("Group expenses found (excluding pot/individual):", filteredExpenses.length);
 
     // Track balance and expense details per person relative to current user
     const balanceDetails = new Map<

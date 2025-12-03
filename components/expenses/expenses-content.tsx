@@ -3,14 +3,14 @@
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, Users, User, Filter } from "lucide-react";
+import { ChevronLeft, Users, User, Filter, PiggyBank } from "lucide-react";
 
 type Expense = {
   id: string;
   title: string;
   totalAmount: number;
   date: string | null;
-  type: "group" | "individual";
+  type: "group" | "individual" | "pot";
   createdAt: string;
   paidBy: string;
   splitBetween: number;
@@ -22,7 +22,7 @@ type ExpensesContentProps = {
   currentUserId: string;
 };
 
-type FilterType = "all" | "mine" | "group" | "individual";
+type FilterType = "all" | "mine" | "group" | "individual" | "pot";
 
 export function ExpensesContent({ expenses, currentUserId }: ExpensesContentProps) {
   const router = useRouter();
@@ -38,6 +38,8 @@ export function ExpensesContent({ expenses, currentUserId }: ExpensesContentProp
           return expense.type === "group";
         case "individual":
           return expense.type === "individual";
+        case "pot":
+          return expense.type === "pot";
         default:
           return true;
       }
@@ -69,6 +71,7 @@ export function ExpensesContent({ expenses, currentUserId }: ExpensesContentProp
     { value: "all", label: "All" },
     { value: "mine", label: "My Expenses" },
     { value: "group", label: "Group" },
+    { value: "pot", label: "Pot" },
     { value: "individual", label: "Personal" },
   ];
 
@@ -128,11 +131,15 @@ export function ExpensesContent({ expenses, currentUserId }: ExpensesContentProp
                       className={`w-10 h-10 rounded-full flex items-center justify-center ${
                         expense.type === "group"
                           ? "bg-blue-500/10"
+                          : expense.type === "pot"
+                          ? "bg-amber-500/10"
                           : "bg-purple-500/10"
                       }`}
                     >
                       {expense.type === "group" ? (
                         <Users className="w-5 h-5 text-blue-500" />
+                      ) : expense.type === "pot" ? (
+                        <PiggyBank className="w-5 h-5 text-amber-500" />
                       ) : (
                         <User className="w-5 h-5 text-purple-500" />
                       )}
@@ -142,7 +149,7 @@ export function ExpensesContent({ expenses, currentUserId }: ExpensesContentProp
                         {expense.title}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {expense.paidBy} paid • {expense.type === "group" ? `${expense.splitBetween} people` : "Personal"}
+                        {expense.paidBy} paid • {expense.type === "group" ? `${expense.splitBetween} people` : expense.type === "pot" ? `${expense.splitBetween} people (pot)` : "Personal"}
                       </p>
                     </div>
                     <div className="text-right">

@@ -14,6 +14,7 @@ import {
   Edit,
   Trash2,
   Loader2,
+  PiggyBank,
 } from "lucide-react";
 import { deleteExpense } from "@/app/actions/expenses";
 
@@ -36,7 +37,7 @@ type Expense = {
   title: string;
   totalAmount: number;
   date: string | null;
-  type: "group" | "individual";
+  type: "group" | "individual" | "pot";
   payers: Payer[];
   splits: Split[];
   createdBy: string;
@@ -91,6 +92,7 @@ export function ExpenseDetail({ expense, currentUserId }: ExpenseDetailProps) {
   const yourShare = yourSplit?.amount || 0;
 
   const isGroupExpense = expense.type === "group";
+  const isPotExpense = expense.type === "pot";
 
   return (
     <div className="space-y-6">
@@ -108,7 +110,11 @@ export function ExpenseDetail({ expense, currentUserId }: ExpenseDetailProps) {
           <div>
             <h1 className="text-xl font-bold">Expense Details</h1>
             <p className="text-sm text-muted-foreground flex items-center gap-1">
-              {isGroupExpense ? (
+              {isPotExpense ? (
+                <>
+                  <PiggyBank className="w-3.5 h-3.5" /> Pot expense
+                </>
+              ) : isGroupExpense ? (
                 <>
                   <Users className="w-3.5 h-3.5" /> Group expense
                 </>
@@ -134,14 +140,18 @@ export function ExpenseDetail({ expense, currentUserId }: ExpenseDetailProps) {
           </div>
           <div
             className={`w-12 h-12 rounded-full flex items-center justify-center ${
-              isGroupExpense ? "bg-blue-500/10" : "bg-purple-500/10"
+              isPotExpense ? "bg-amber-500/10" : isGroupExpense ? "bg-blue-500/10" : "bg-purple-500/10"
             }`}
           >
-            <Receipt
-              className={`w-6 h-6 ${
-                isGroupExpense ? "text-blue-500" : "text-purple-500"
-              }`}
-            />
+            {isPotExpense ? (
+              <PiggyBank className="w-6 h-6 text-amber-500" />
+            ) : (
+              <Receipt
+                className={`w-6 h-6 ${
+                  isGroupExpense ? "text-blue-500" : "text-purple-500"
+                }`}
+              />
+            )}
           </div>
         </div>
 
@@ -155,9 +165,11 @@ export function ExpenseDetail({ expense, currentUserId }: ExpenseDetailProps) {
         </div>
 
         {/* Your Share */}
-        {isGroupExpense && (
+        {(isGroupExpense || isPotExpense) && (
           <div className="flex items-center justify-between py-3 border-t">
-            <span className="text-sm text-muted-foreground">Your share</span>
+            <span className="text-sm text-muted-foreground">
+              {isPotExpense ? "Deducted from your pot" : "Your share"}
+            </span>
             <span className="text-lg font-bold text-primary">
               ฿{yourShare.toLocaleString()}
             </span>
@@ -227,7 +239,7 @@ export function ExpenseDetail({ expense, currentUserId }: ExpenseDetailProps) {
       </div>
 
       {/* Split Breakdown Section */}
-      {isGroupExpense && (
+      {(isGroupExpense || isPotExpense) && (
         <div className="space-y-3">
           <div className="flex items-center gap-2">
             <PieChart className="w-4 h-4 text-muted-foreground" />

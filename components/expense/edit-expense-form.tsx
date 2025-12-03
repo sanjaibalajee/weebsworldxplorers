@@ -27,7 +27,7 @@ type ExpenseData = {
   title: string;
   totalAmount: number;
   date: string | null;
-  type: "group" | "individual";
+  type: "group" | "individual" | "pot";
   payers: { userId: string; name: string; cashGiven: number; changeTaken: number }[];
   splits: { userId: string; name: string; shares: number; amount: number }[];
 };

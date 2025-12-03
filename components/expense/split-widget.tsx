@@ -6,6 +6,8 @@ import { Check, Minus, Plus } from "lucide-react";
 
 type User = { id: string; name: string };
 
+type UserWithPot = { id: string; name: string; potBalance: number };
+
 type Split = {
   userId: string;
   shares: number;
@@ -20,6 +22,8 @@ type SplitWidgetProps = {
   setSelectedUserIds: React.Dispatch<React.SetStateAction<Set<string>>>;
   totalAmount: number;
   totalShares: number;
+  showPotBalance?: boolean;
+  usersWithPots?: UserWithPot[];
 };
 
 type SplitMode = "equal" | "shares" | "amount";
@@ -32,6 +36,8 @@ export function SplitWidget({
   setSelectedUserIds,
   totalAmount,
   totalShares,
+  showPotBalance = false,
+  usersWithPots = [],
 }: SplitWidgetProps) {
   const [splitMode, setSplitMode] = useState<SplitMode>("equal");
 
@@ -95,6 +101,10 @@ export function SplitWidget({
 
   const getUserShares = (userId: string) => {
     return splits.find((s) => s.userId === userId)?.shares || 1;
+  };
+
+  const getUserPotBalance = (userId: string) => {
+    return usersWithPots.find((u) => u.id === userId)?.potBalance || 0;
   };
 
   const getCustomAmount = (userId: string) => {
@@ -193,9 +203,16 @@ export function SplitWidget({
                   >
                     {isSelected && <Check className="w-3 h-3 text-primary-foreground" />}
                   </div>
-                  <span className={`text-sm font-medium ${!isSelected && "text-muted-foreground"}`}>
-                    {user.name}
-                  </span>
+                  <div className="text-left">
+                    <span className={`text-sm font-medium ${!isSelected && "text-muted-foreground"}`}>
+                      {user.name}
+                    </span>
+                    {showPotBalance && (
+                      <p className={`text-xs ${getUserPotBalance(user.id) >= amount ? "text-green-600" : "text-red-500"}`}>
+                        Pot: ฿{getUserPotBalance(user.id).toLocaleString()}
+                      </p>
+                    )}
+                  </div>
                 </button>
 
                 {isSelected && (
