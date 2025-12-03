@@ -11,7 +11,6 @@ import {
   Receipt,
   Banknote,
   PieChart,
-  Edit,
   Trash2,
   Loader2,
   PiggyBank,
@@ -316,14 +315,6 @@ export function ExpenseDetail({ expense, currentUserId }: ExpenseDetailProps) {
 
       {/* Action Buttons */}
       <div className="flex gap-3 pt-2">
-        <Button
-          variant="outline"
-          className="flex-1 h-11 gap-2"
-          onClick={() => router.push(`/expense/${expense.id}/edit`)}
-        >
-          <Edit className="w-4 h-4" />
-          Edit
-        </Button>
         <Button
           variant="outline"
           className="flex-1 h-11 gap-2 text-red-600 hover:text-red-600 hover:bg-red-500/10 border-red-200 dark:border-red-900"

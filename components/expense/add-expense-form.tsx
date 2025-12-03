@@ -23,7 +23,10 @@ type Payer = {
 type Split = {
   userId: string;
   shares: number;
+  customAmount?: number;
 };
+
+type SplitMode = "equal" | "shares" | "amount";
 
 type AddExpenseFormProps = {
   currentUser: User;
@@ -77,6 +80,7 @@ export function AddExpenseForm({
     }
     return new Set(users.map((u) => u.id));
   });
+  const [splitMode, setSplitMode] = useState<SplitMode>("equal");
 
   // When switching to individual, select only current user
   const handleTypeSelect = (type: ExpenseType) => {
@@ -142,38 +146,58 @@ export function AddExpenseForm({
       let finalPayers: { userId: string; cashGiven: number; changeTaken: number }[];
       let finalSplits: { userId: string; shares: number; owedAmount: number }[];
 
+      // Helper to calculate splits with proper rounding that sums to exact total
+      const calculateSplitsWithExactTotal = (
+        filteredSplits: Split[]
+      ): { userId: string; shares: number; owedAmount: number }[] => {
+        if (filteredSplits.length === 0) return [];
+
+        // First pass: calculate raw amounts
+        const rawAmounts = filteredSplits.map((s) => {
+          if (splitMode === "equal") {
+            return totalAmount / filteredSplits.length;
+          } else if (splitMode === "shares") {
+            return (s.shares / totalShares) * totalAmount;
+          } else {
+            return s.customAmount || 0;
+          }
+        });
+
+        // Round all amounts to 2 decimal places
+        const roundedAmounts = rawAmounts.map((a) => Math.round(a * 100) / 100);
+
+        // Calculate the sum and the difference from total
+        const sum = roundedAmounts.reduce((acc, a) => acc + a, 0);
+        const diff = Math.round((totalAmount - sum) * 100) / 100;
+
+        // Add the difference to the first person to make it exact
+        if (diff !== 0 && roundedAmounts.length > 0) {
+          roundedAmounts[0] = Math.round((roundedAmounts[0] + diff) * 100) / 100;
+        }
+
+        return filteredSplits.map((s, i) => ({
+          userId: s.userId,
+          shares: s.shares,
+          owedAmount: roundedAmounts[i],
+        }));
+      };
+
       if (expenseType === "individual") {
         finalPayers = [{ userId: currentUser.id, cashGiven: totalAmount, changeTaken: 0 }];
         finalSplits = [{ userId: currentUser.id, shares: 1, owedAmount: totalAmount }];
       } else if (expenseType === "pot") {
         // For pot expenses, admin is the payer (handled on server)
         finalPayers = [];
-        finalSplits = splits
-          .filter((s) => selectedUserIds.has(s.userId))
-          .map((s) => {
-            const shareAmount = (s.shares / totalShares) * totalAmount;
-            return {
-              userId: s.userId,
-              shares: s.shares,
-              owedAmount: Math.round(shareAmount * 100) / 100,
-            };
-          });
+        const filteredSplits = splits.filter((s) => selectedUserIds.has(s.userId));
+        finalSplits = calculateSplitsWithExactTotal(filteredSplits);
       } else {
         finalPayers = payers.map((p) => ({
           userId: p.userId,
           cashGiven: p.cashGiven,
           changeTaken: p.changeTaken,
         }));
-        finalSplits = splits
-          .filter((s) => selectedUserIds.has(s.userId))
-          .map((s) => {
-            const shareAmount = (s.shares / totalShares) * totalAmount;
-            return {
-              userId: s.userId,
-              shares: s.shares,
-              owedAmount: Math.round(shareAmount * 100) / 100,
-            };
-          });
+        const filteredSplits = splits.filter((s) => selectedUserIds.has(s.userId));
+        finalSplits = calculateSplitsWithExactTotal(filteredSplits);
       }
 
       const result = await createExpense({
@@ -400,6 +424,8 @@ export function AddExpenseForm({
           totalShares={totalShares}
           showPotBalance={expenseType === "pot"}
           usersWithPots={usersWithPots}
+          splitMode={splitMode}
+          onSplitModeChange={setSplitMode}
         />
       )}
 

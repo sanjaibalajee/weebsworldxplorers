@@ -282,6 +282,9 @@ export async function getExpenses(type?: "group" | "individual" | "pot", onlyMin
       },
     });
 
+    // Check if current user is admin
+    const isAdmin = currentUser.name.toLowerCase() === "admin";
+
     // Filter: show only expenses where user is involved
     const filtered = allExpenses.filter((expense) => {
       // For individual expenses, only show if created by current user
@@ -289,6 +292,12 @@ export async function getExpenses(type?: "group" | "individual" | "pot", onlyMin
       if (expense.type === "individual") {
         return expense.createdBy?.id === currentUser.id;
       }
+
+      // For pot expenses, admin can see all pot expenses they created
+      if (expense.type === "pot" && isAdmin) {
+        return expense.createdBy?.id === currentUser.id;
+      }
+
       // For group/pot expenses, only show if user has a split (is part of the expense)
       const isInSplit = expense.splits.some((s) => s.userId === currentUser.id);
 
@@ -417,13 +426,107 @@ export async function deleteExpense(id: string) {
   }
 
   try {
-    // Delete associated wallet transactions first
+    // Get the expense with its details first
+    const expense = await db.query.expenses.findFirst({
+      where: eq(expenses.id, id),
+      with: {
+        splits: true,
+        payers: true,
+      },
+    });
+
+    if (!expense) {
+      return { success: false, error: "Expense not found" };
+    }
+
+    // If it's a pot expense, refund the pot balances
+    if (expense.type === "pot") {
+      const { userPots, potTransactions } = await import("@/app/db/schema");
+
+      for (const split of expense.splits) {
+        if (!split.userId) continue;
+        const refundAmount = parseFloat(split.owedAmountThb);
+
+        // Get current pot balance
+        const pot = await db.query.userPots.findFirst({
+          where: eq(userPots.userId, split.userId),
+        });
+
+        if (pot) {
+          const currentBalance = parseFloat(pot.balance || "0");
+          const newBalance = currentBalance + refundAmount;
+
+          // Update pot balance
+          await db.update(userPots)
+            .set({
+              balance: newBalance.toString(),
+              updatedAt: new Date(),
+            })
+            .where(eq(userPots.userId, split.userId));
+
+          // Record pot refund transaction
+          await db.insert(potTransactions).values({
+            userId: split.userId,
+            type: "refund",
+            amountThb: refundAmount.toString(),
+            balanceAfter: newBalance.toString(),
+            referenceId: null, // Don't link to deleted expense
+            referenceType: null,
+            description: `Refund: ${expense.title} deleted`,
+            createdBy: currentUser.id,
+          });
+        }
+      }
+    }
+
+    // For expenses with payers (group/individual), refund wallet balances
+    if (expense.type !== "pot") {
+      for (const payer of expense.payers) {
+        if (!payer.userId) continue;
+        const paidAmount = parseFloat(payer.cashGiven || "0") - parseFloat(payer.changeTaken || "0");
+
+        if (paidAmount > 0) {
+          // Get current wallet balance
+          const lastTransaction = await db.query.walletTransactions.findFirst({
+            where: eq(walletTransactions.userId, payer.userId),
+            orderBy: [desc(walletTransactions.createdAt)],
+          });
+
+          const currentBalance = lastTransaction ? parseFloat(lastTransaction.balanceAfter) : 0;
+          const newBalance = currentBalance + paidAmount;
+
+          // Record wallet refund (use "expense_refund" type to distinguish)
+          await db.insert(walletTransactions).values({
+            userId: payer.userId,
+            type: "topup",
+            amountThb: paidAmount.toString(),
+            balanceAfter: newBalance.toString(),
+            referenceId: null, // Don't link to deleted expense
+            referenceType: null,
+            description: `Refund: ${expense.title} deleted`,
+          });
+        }
+      }
+    }
+
+    // Delete associated wallet transactions for this expense (expense_paid entries)
     await db.delete(walletTransactions).where(
       and(
         eq(walletTransactions.referenceId, id),
         eq(walletTransactions.referenceType, "expense")
       )
     );
+
+    // Also delete any pot_transactions for this expense
+    if (expense.type === "pot") {
+      const { potTransactions: potTxTable } = await import("@/app/db/schema");
+      await db.delete(potTxTable).where(
+        and(
+          eq(potTxTable.referenceId, id),
+          eq(potTxTable.referenceType, "expense")
+        )
+      );
+    }
 
     // Delete the expense (cascades to payers and splits)
     await db.delete(expenses).where(eq(expenses.id, id));

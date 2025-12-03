@@ -14,6 +14,8 @@ type Split = {
   customAmount?: number;
 };
 
+type SplitMode = "equal" | "shares" | "amount";
+
 type SplitWidgetProps = {
   users: User[];
   splits: Split[];
@@ -24,9 +26,9 @@ type SplitWidgetProps = {
   totalShares: number;
   showPotBalance?: boolean;
   usersWithPots?: UserWithPot[];
+  splitMode?: SplitMode;
+  onSplitModeChange?: (mode: SplitMode) => void;
 };
-
-type SplitMode = "equal" | "shares" | "amount";
 
 export function SplitWidget({
   users,
@@ -38,8 +40,20 @@ export function SplitWidget({
   totalShares,
   showPotBalance = false,
   usersWithPots = [],
+  splitMode: externalSplitMode,
+  onSplitModeChange,
 }: SplitWidgetProps) {
-  const [splitMode, setSplitMode] = useState<SplitMode>("equal");
+  const [internalSplitMode, setInternalSplitMode] = useState<SplitMode>("equal");
+
+  // Use external mode if provided, otherwise use internal
+  const splitMode = externalSplitMode ?? internalSplitMode;
+  const setSplitMode = (mode: SplitMode) => {
+    if (onSplitModeChange) {
+      onSplitModeChange(mode);
+    } else {
+      setInternalSplitMode(mode);
+    }
+  };
 
   const toggleUser = (userId: string) => {
     const newSet = new Set(selectedUserIds);
