@@ -218,7 +218,7 @@ export async function getExpense(id: string) {
   }
 }
 
-export async function getExpenses(type?: "group" | "individual") {
+export async function getExpenses(type?: "group" | "individual", onlyMine?: boolean) {
   const currentUser = await getCurrentUser();
   if (!currentUser) {
     return [];
@@ -251,7 +251,23 @@ export async function getExpenses(type?: "group" | "individual") {
       },
     });
 
-    return allExpenses.map((expense) => {
+    // Filter: show all group expenses, but only current user's individual expenses
+    // If onlyMine is true, only show expenses where user is involved
+    const filtered = allExpenses.filter((expense) => {
+      // For individual expenses, only show if created by current user
+      if (expense.type === "individual" && expense.createdBy !== currentUser.id) {
+        return false;
+      }
+      // If onlyMine filter is on, only show expenses where user paid or is in split
+      if (onlyMine) {
+        const isPayer = expense.payers.some((p) => p.userId === currentUser.id);
+        const isInSplit = expense.splits.some((s) => s.userId === currentUser.id);
+        return isPayer || isInSplit;
+      }
+      return true;
+    });
+
+    return filtered.map((expense) => {
       const yourSplit = expense.splits.find((s) => s.userId === currentUser.id);
       const primaryPayer = expense.payers[0];
 
@@ -282,7 +298,7 @@ export async function getRecentExpenses(limit: number = 5) {
   try {
     const recentExpenses = await db.query.expenses.findMany({
       orderBy: [desc(expenses.createdAt)],
-      limit,
+      limit: limit * 2, // Fetch more to account for filtering
       with: {
         payers: {
           with: {
@@ -301,7 +317,14 @@ export async function getRecentExpenses(limit: number = 5) {
       },
     });
 
-    return recentExpenses.map((expense) => {
+    // Filter: show all group expenses, but only current user's individual expenses
+    const filtered = recentExpenses.filter((expense) => {
+      if (expense.type === "group") return true;
+      // For individual expenses, only show if created by current user
+      return expense.createdBy === currentUser.id;
+    }).slice(0, limit);
+
+    return filtered.map((expense) => {
       const yourSplit = expense.splits.find((s) => s.userId === currentUser.id);
       const primaryPayer = expense.payers[0];
 
@@ -341,6 +364,7 @@ export async function getRecentExpenses(limit: number = 5) {
         yourShare: yourSplit ? parseFloat(yourSplit.owedAmountThb) : 0,
         paidBy: primaryPayer?.user?.name || "Unknown",
         date: dateStr,
+        type: expense.type as "group" | "individual",
       };
     });
   } catch (error) {
