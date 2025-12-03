@@ -282,21 +282,23 @@ export async function getExpenses(type?: "group" | "individual" | "pot", onlyMin
       },
     });
 
-    // Filter: show all group expenses, but only current user's individual expenses
-    // If onlyMine is true, only show expenses where user is involved
+    // Filter: show only expenses where user is involved
     const filtered = allExpenses.filter((expense) => {
       // For individual expenses, only show if created by current user
       // Note: createdBy is an object from relation, so we check createdBy.id
-      if (expense.type === "individual" && expense.createdBy?.id !== currentUser.id) {
-        return false;
+      if (expense.type === "individual") {
+        return expense.createdBy?.id === currentUser.id;
       }
-      // If onlyMine filter is on, only show expenses where user paid or is in split
+      // For group/pot expenses, only show if user has a split (is part of the expense)
+      const isInSplit = expense.splits.some((s) => s.userId === currentUser.id);
+
+      // If onlyMine filter is on, also check if user paid
       if (onlyMine) {
         const isPayer = expense.payers.some((p) => p.userId === currentUser.id);
-        const isInSplit = expense.splits.some((s) => s.userId === currentUser.id);
         return isPayer || isInSplit;
       }
-      return true;
+
+      return isInSplit;
     });
 
     return filtered.map((expense) => {
@@ -349,11 +351,14 @@ export async function getRecentExpenses(limit: number = 5) {
       },
     });
 
-    // Filter: show all group/pot expenses, but only current user's individual expenses
+    // Filter: show only expenses where user is involved (has a split)
+    // For individual expenses, only show if created by current user
     const filtered = recentExpenses.filter((expense) => {
-      if (expense.type === "group" || expense.type === "pot") return true;
-      // For individual expenses, only show if created by current user
-      return expense.createdBy === currentUser.id;
+      if (expense.type === "individual") {
+        return expense.createdBy === currentUser.id;
+      }
+      // For group/pot expenses, only show if user has a split
+      return expense.splits.some((s) => s.userId === currentUser.id);
     }).slice(0, limit);
 
     return filtered.map((expense) => {

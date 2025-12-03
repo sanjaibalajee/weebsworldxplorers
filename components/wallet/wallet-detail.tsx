@@ -18,6 +18,7 @@ import {
   PiggyBank,
 } from "lucide-react";
 import { createTopup } from "@/app/actions/wallet";
+import { formatThaiRelativeDate, formatThaiDate } from "@/lib/date-utils";
 
 type Transaction = {
   id: string;
@@ -108,42 +109,10 @@ export function WalletDetail({
     });
   };
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffDays = Math.floor(
-      (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24)
-    );
-
-    if (diffDays === 0) {
-      return `Today, ${date.toLocaleTimeString("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-      })}`;
-    } else if (diffDays === 1) {
-      return `Yesterday, ${date.toLocaleTimeString("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-      })}`;
-    } else if (diffDays < 7) {
-      return date.toLocaleDateString("en-US", {
-        weekday: "short",
-        hour: "numeric",
-        minute: "2-digit",
-      });
-    }
-    return date.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  };
-
   // Group transactions by date
   const groupedTransactions = transactions.reduce(
     (groups, transaction) => {
-      const date = new Date(transaction.date).toLocaleDateString("en-US", {
+      const date = formatThaiDate(transaction.date, {
         month: "long",
         day: "numeric",
         year: "numeric",
@@ -290,7 +259,7 @@ export function WalletDetail({
                             </div>
                           </div>
                           <p className="text-[10px] text-muted-foreground mt-1">
-                            {formatDate(transaction.date)}
+                            {formatThaiRelativeDate(transaction.date)}
                           </p>
                         </div>
                       </div>

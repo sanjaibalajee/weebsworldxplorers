@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, Users, User, Receipt, HandCoins, Wallet } from "lucide-react";
+import { formatThaiDateKey, formatThaiTime } from "@/lib/date-utils";
 
 type ExpenseTransaction = {
   id: string;
@@ -52,11 +53,7 @@ export function HistoryPage({ groupTransactions, individualTransactions }: Histo
 
   // Group transactions by date
   const groupedByDate = transactions.reduce((acc, tx) => {
-    const date = new Date(tx.date).toLocaleDateString("en-US", {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-    });
+    const date = formatThaiDateKey(tx.date);
     if (!acc[date]) acc[date] = [];
     acc[date].push(tx);
     return acc;
@@ -174,11 +171,7 @@ function TransactionCard({
   transaction: Transaction;
   onClick: () => void;
 }) {
-  const time = new Date(transaction.date).toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
+  const time = formatThaiTime(transaction.date);
 
   if (transaction.type === "expense") {
     const tx = transaction as ExpenseTransaction;

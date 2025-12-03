@@ -7,6 +7,7 @@ import { ChevronLeft, Users, User, Check, Loader2, PiggyBank } from "lucide-reac
 import { CashFlowWidget } from "./cash-flow-widget";
 import { SplitWidget } from "./split-widget";
 import { createExpense } from "@/app/actions/expenses";
+import { getThaiDateString } from "@/lib/date-utils";
 
 type User = { id: string; name: string };
 
@@ -50,7 +51,7 @@ export function AddExpenseForm({
   // Form state
   const [title, setTitle] = useState("");
   const [totalAmount, setTotalAmount] = useState<number | "">("");
-  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+  const [date, setDate] = useState(getThaiDateString());
 
   // Cash flow state
   const [payers, setPayers] = useState<Payer[]>([
@@ -62,16 +63,20 @@ export function AddExpenseForm({
     },
   ]);
 
+  // Filter out admin from users for pot expenses
+  const nonAdminUsers = users.filter((u) => u.name.toLowerCase() !== "admin");
+
   // Split state - for individual, only current user is selected
+  // For pot, exclude admin from the split
   const [splits, setSplits] = useState<Split[]>(
     users.map((u) => ({ userId: u.id, shares: 1 }))
   );
-  const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(
-    new Set(users.map((u) => u.id))
-  );
-
-  // Filter out admin from users for pot expenses
-  const nonAdminUsers = users.filter((u) => u.name.toLowerCase() !== "admin");
+  const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(() => {
+    if (initialType === "pot") {
+      return new Set(nonAdminUsers.map((u) => u.id));
+    }
+    return new Set(users.map((u) => u.id));
+  });
 
   // When switching to individual, select only current user
   const handleTypeSelect = (type: ExpenseType) => {

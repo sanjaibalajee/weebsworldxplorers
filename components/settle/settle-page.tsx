@@ -7,6 +7,7 @@ import { ChevronLeft, Clock, Check, X, Loader2 } from "lucide-react";
 import { BalanceCard } from "./balance-card";
 import { SettleModal } from "./settle-modal";
 import { createSettlement, confirmSettlement, rejectSettlement } from "@/app/actions/settlements";
+import { formatThaiDate } from "@/lib/date-utils";
 
 type Expense = {
   id: string;
@@ -284,7 +285,7 @@ function PendingSettlementCard({
 }: PendingSettlementCardProps) {
   const [addToWallet, setAddToWallet] = useState(true);
 
-  const formattedDate = new Date(settlement.date).toLocaleDateString("en-US", {
+  const formattedDate = formatThaiDate(settlement.date, {
     month: "short",
     day: "numeric",
     hour: "numeric",
@@ -377,7 +378,7 @@ type OutgoingPendingCardProps = {
 };
 
 function OutgoingPendingCard({ settlement }: OutgoingPendingCardProps) {
-  const formattedDate = new Date(settlement.date).toLocaleDateString("en-US", {
+  const formattedDate = formatThaiDate(settlement.date, {
     month: "short",
     day: "numeric",
     hour: "numeric",

@@ -3,8 +3,9 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, Wallet, Plus, Loader2, PiggyBank, Users } from "lucide-react";
+import { Wallet, Plus, Loader2, PiggyBank, Users, RefreshCw, LogOut } from "lucide-react";
 import { loadPot, bulkLoadPot } from "@/app/actions/pot";
+import { logout } from "@/app/actions/auth";
 
 type User = {
   id: string;
@@ -27,6 +28,18 @@ export function AdminDashboard({ users, totalPotBalance }: AdminDashboardProps) 
   const [bulkAmount, setBulkAmount] = useState<number | "">("");
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkResult, setBulkResult] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const handleRefresh = () => {
+    setIsRefreshing(true);
+    router.refresh();
+    setTimeout(() => setIsRefreshing(false), 1000);
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    router.push("/login");
+  };
 
   const handleLoadPot = () => {
     if (!selectedUser || amount === "" || amount <= 0) return;
@@ -64,18 +77,24 @@ export function AdminDashboard({ users, totalPotBalance }: AdminDashboardProps) 
   return (
     <div className="min-h-screen bg-background px-4 py-6 pb-8 max-w-md mx-auto">
       {/* Header */}
-      <div className="flex items-center gap-3 mb-6">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => router.push("/dashboard")}
-          className="shrink-0"
-        >
-          <ChevronLeft className="w-5 h-5" />
-        </Button>
+      <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-xl font-bold">Admin Panel</h1>
           <p className="text-sm text-muted-foreground">Manage group pots</p>
+        </div>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            className="h-9 w-9"
+          >
+            <RefreshCw className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} />
+          </Button>
+          <Button variant="ghost" size="sm" onClick={handleLogout}>
+            Logout
+          </Button>
         </div>
       </div>
 

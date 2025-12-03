@@ -4,6 +4,7 @@ import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, Users, User, Filter, PiggyBank } from "lucide-react";
+import { formatThaiDateKey } from "@/lib/date-utils";
 
 type Expense = {
   id: string;
@@ -51,12 +52,7 @@ export function ExpensesContent({ expenses, currentUserId }: ExpensesContentProp
     const groups: { [key: string]: Expense[] } = {};
 
     filteredExpenses.forEach((expense) => {
-      const date = new Date(expense.createdAt);
-      const dateKey = date.toLocaleDateString("en-US", {
-        weekday: "long",
-        month: "short",
-        day: "numeric",
-      });
+      const dateKey = formatThaiDateKey(expense.createdAt);
 
       if (!groups[dateKey]) {
         groups[dateKey] = [];

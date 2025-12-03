@@ -7,6 +7,7 @@ import { ChevronLeft, Users, User, Check, Loader2 } from "lucide-react";
 import { CashFlowWidget } from "./cash-flow-widget";
 import { SplitWidget } from "./split-widget";
 import { updateExpense } from "@/app/actions/expenses";
+import { getThaiDateString } from "@/lib/date-utils";
 
 type User = { id: string; name: string };
 
@@ -45,7 +46,7 @@ export function EditExpenseForm({ expense, currentUser, users }: EditExpenseForm
   // Form state - initialized from expense
   const [title, setTitle] = useState(expense.title);
   const [totalAmount, setTotalAmount] = useState<number | "">(expense.totalAmount);
-  const [date, setDate] = useState(expense.date || new Date().toISOString().split("T")[0]);
+  const [date, setDate] = useState(expense.date || getThaiDateString());
 
   // Cash flow state - initialized from expense payers
   const [payers, setPayers] = useState<Payer[]>(

@@ -17,6 +17,7 @@ import {
   PiggyBank,
 } from "lucide-react";
 import { deleteExpense } from "@/app/actions/expenses";
+import { formatThaiDate, formatThaiDateTime } from "@/lib/date-utils";
 
 type Payer = {
   userId: string;
@@ -67,7 +68,7 @@ export function ExpenseDetail({ expense, currentUserId }: ExpenseDetailProps) {
   };
 
   const formattedDate = expense.date
-    ? new Date(expense.date).toLocaleDateString("en-US", {
+    ? formatThaiDate(expense.date, {
         weekday: "long",
         year: "numeric",
         month: "long",
@@ -75,7 +76,7 @@ export function ExpenseDetail({ expense, currentUserId }: ExpenseDetailProps) {
       })
     : "Unknown date";
 
-  const createdAtFormatted = new Date(expense.createdAt).toLocaleString("en-US", {
+  const createdAtFormatted = formatThaiDateTime(expense.createdAt, {
     month: "short",
     day: "numeric",
     hour: "numeric",
