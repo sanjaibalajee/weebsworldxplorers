@@ -87,11 +87,20 @@ export function AddExpenseForm({ currentUser, users }: AddExpenseFormProps) {
 
   // Validation
   const isValid = useMemo(() => {
-    return (
+    const basicValid =
       expenseType !== null &&
       title.trim() !== "" &&
       totalAmount !== "" &&
-      totalAmount > 0 &&
+      totalAmount > 0;
+
+    if (expenseType === "individual") {
+      // Individual expenses don't need cash flow validation
+      return basicValid;
+    }
+
+    // Group expenses need full validation
+    return (
+      basicValid &&
       cashDifference === 0 &&
       selectedUserIds.size > 0 &&
       totalShares > 0
@@ -315,7 +324,7 @@ export function AddExpenseForm({ currentUser, users }: AddExpenseFormProps) {
       {/* Save Button */}
       <Button
         className="w-full h-12 text-base"
-        disabled={!isValid || (expenseType === "individual" && totalAmount === "") || isPending}
+        disabled={!isValid || isPending}
         onClick={handleSubmit}
       >
         {isPending ? (
@@ -323,7 +332,7 @@ export function AddExpenseForm({ currentUser, users }: AddExpenseFormProps) {
             <Loader2 className="w-5 h-5 mr-2 animate-spin" />
             Saving...
           </>
-        ) : (isValid || (expenseType === "individual" && title && totalAmount)) ? (
+        ) : isValid ? (
           <>
             <Check className="w-5 h-5 mr-2" />
             Save Expense
