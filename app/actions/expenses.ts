@@ -288,7 +288,6 @@ export async function getExpenses(type?: "group" | "individual" | "pot", onlyMin
     // Filter: show only expenses where user is involved
     const filtered = allExpenses.filter((expense) => {
       // For individual expenses, only show if created by current user
-      // Note: createdBy is an object from relation, so we check createdBy.id
       if (expense.type === "individual") {
         return expense.createdBy?.id === currentUser.id;
       }
@@ -298,16 +297,21 @@ export async function getExpenses(type?: "group" | "individual" | "pot", onlyMin
         return expense.createdBy?.id === currentUser.id;
       }
 
-      // For group/pot expenses, only show if user has a split (is part of the expense)
+      // For ALL expense types (group/pot), show if user is:
+      // 1. In the split (owes money)
+      // 2. A payer (paid for the expense)
+      // 3. The creator of the expense
       const isInSplit = expense.splits.some((s) => s.userId === currentUser.id);
+      const isPayer = expense.payers.some((p) => p.userId === currentUser.id);
+      const isCreator = expense.createdBy?.id === currentUser.id;
 
-      // If onlyMine filter is on, also check if user paid
+      // If onlyMine filter is on, check involvement
       if (onlyMine) {
-        const isPayer = expense.payers.some((p) => p.userId === currentUser.id);
         return isPayer || isInSplit;
       }
 
-      return isInSplit;
+      // Show expense if user is involved in any way
+      return isInSplit || isPayer || isCreator;
     });
 
     return filtered.map((expense) => {
@@ -341,8 +345,11 @@ export async function getRecentExpenses(limit: number = 5) {
   try {
     const recentExpenses = await db.query.expenses.findMany({
       orderBy: [desc(expenses.createdAt)],
-      limit: limit * 2, // Fetch more to account for filtering
+      limit: limit * 3, // Fetch more to account for filtering
       with: {
+        createdBy: {
+          columns: { id: true, name: true },
+        },
         payers: {
           with: {
             user: {
@@ -360,14 +367,26 @@ export async function getRecentExpenses(limit: number = 5) {
       },
     });
 
-    // Filter: show only expenses where user is involved (has a split)
-    // For individual expenses, only show if created by current user
+    // Check if current user is admin
+    const isAdmin = currentUser.name.toLowerCase() === "admin";
+
+    // Filter: show only expenses where user is involved
     const filtered = recentExpenses.filter((expense) => {
+      // For individual expenses, only show if created by current user
       if (expense.type === "individual") {
-        return expense.createdBy === currentUser.id;
+        return expense.createdBy?.id === currentUser.id;
       }
-      // For group/pot expenses, only show if user has a split
-      return expense.splits.some((s) => s.userId === currentUser.id);
+
+      // For pot expenses, admin can see all pot expenses they created
+      if (expense.type === "pot" && isAdmin) {
+        return expense.createdBy?.id === currentUser.id;
+      }
+
+      // For group/pot expenses, show if user is in split, is a payer, or is creator
+      const isInSplit = expense.splits.some((s) => s.userId === currentUser.id);
+      const isPayer = expense.payers.some((p) => p.userId === currentUser.id);
+      const isCreator = expense.createdBy?.id === currentUser.id;
+      return isInSplit || isPayer || isCreator;
     }).slice(0, limit);
 
     return filtered.map((expense) => {

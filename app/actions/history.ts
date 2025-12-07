@@ -50,6 +50,9 @@ export async function getTransactionHistory() {
     const allExpenses = await db.query.expenses.findMany({
       orderBy: [desc(expenses.createdAt)],
       with: {
+        createdBy: {
+          columns: { id: true, name: true },
+        },
         payers: {
           with: {
             user: { columns: { id: true, name: true } },
@@ -85,6 +88,9 @@ export async function getTransactionHistory() {
       },
     });
 
+    // Check if current user is admin
+    const isAdmin = currentUser.name.toLowerCase() === "admin";
+
     // Transform expenses and separate by type
     const groupExpenseTransactions: ExpenseTransaction[] = [];
     const individualExpenseTransactions: ExpenseTransaction[] = [];
@@ -93,27 +99,57 @@ export async function getTransactionHistory() {
       const yourSplit = e.splits.find((s) => s.userId === currentUser.id);
       const primaryPayer = e.payers[0];
 
-      // Skip expenses where user has no split (not involved)
-      if (!yourSplit) continue;
+      // Check if user is involved in this expense
+      const isInSplit = e.splits.some((s) => s.userId === currentUser.id);
+      const isPayer = e.payers.some((p) => p.userId === currentUser.id);
+      const isCreator = e.createdBy?.id === currentUser.id;
 
-      const transaction: ExpenseTransaction = {
-        id: e.id,
-        type: "expense" as const,
-        title: e.title,
-        amount: parseFloat(e.totalAmountThb),
-        date: e.createdAt?.toISOString() || "",
-        paidBy: primaryPayer?.user?.name || "Unknown",
-        splitBetween: e.splits.length,
-        yourShare: parseFloat(yourSplit.owedAmountThb),
-      };
-
+      // For individual expenses, only show if created by current user
       if (e.type === "individual") {
-        // Only show individual expenses created by current user
-        if (e.createdBy === currentUser.id) {
-          individualExpenseTransactions.push(transaction);
+        if (isCreator) {
+          individualExpenseTransactions.push({
+            id: e.id,
+            type: "expense" as const,
+            title: e.title,
+            amount: parseFloat(e.totalAmountThb),
+            date: e.createdAt?.toISOString() || "",
+            paidBy: primaryPayer?.user?.name || "Unknown",
+            splitBetween: e.splits.length,
+            yourShare: yourSplit ? parseFloat(yourSplit.owedAmountThb) : 0,
+          });
         }
-      } else {
-        groupExpenseTransactions.push(transaction);
+        continue;
+      }
+
+      // For pot expenses, admin can see all pot expenses they created
+      if (e.type === "pot" && isAdmin) {
+        if (isCreator) {
+          groupExpenseTransactions.push({
+            id: e.id,
+            type: "expense" as const,
+            title: e.title,
+            amount: parseFloat(e.totalAmountThb),
+            date: e.createdAt?.toISOString() || "",
+            paidBy: primaryPayer?.user?.name || "Unknown",
+            splitBetween: e.splits.length,
+            yourShare: yourSplit ? parseFloat(yourSplit.owedAmountThb) : 0,
+          });
+        }
+        continue;
+      }
+
+      // For group/pot expenses, show if user is in split, payer, or creator
+      if (isInSplit || isPayer || isCreator) {
+        groupExpenseTransactions.push({
+          id: e.id,
+          type: "expense" as const,
+          title: e.title,
+          amount: parseFloat(e.totalAmountThb),
+          date: e.createdAt?.toISOString() || "",
+          paidBy: primaryPayer?.user?.name || "Unknown",
+          splitBetween: e.splits.length,
+          yourShare: yourSplit ? parseFloat(yourSplit.owedAmountThb) : 0,
+        });
       }
     }
 

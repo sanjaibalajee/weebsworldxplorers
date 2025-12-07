@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/app/actions/auth";
-import { getDetailedBalances, getPendingSettlements, getOutgoingPendingSettlements } from "@/app/actions/settlements";
+import { getDetailedBalances } from "@/app/actions/settlements";
 import { getWalletBalance } from "@/app/actions/wallet";
 import { SettlePage } from "@/components/settle/settle-page";
 
@@ -11,11 +11,9 @@ export default async function SettleUpPage() {
     redirect("/login");
   }
 
-  const [balanceResult, walletBalance, pendingSettlements, outgoingPendingSettlements] = await Promise.all([
+  const [balanceResult, walletBalance] = await Promise.all([
     getDetailedBalances(),
     getWalletBalance(),
-    getPendingSettlements(),
-    getOutgoingPendingSettlements(),
   ]);
 
   const { owedToYou, owedByYou } = balanceResult;
@@ -34,7 +32,7 @@ export default async function SettleUpPage() {
       userId: p.userId,
       name: p.name,
       netAmount: -p.netAmount, // negative - you owe them
-      expenses: p.expenses, // keep amounts positive, the card handles display
+      expenses: p.expenses,
     })),
   ];
 
@@ -43,8 +41,6 @@ export default async function SettleUpPage() {
       <SettlePage
         balances={balances}
         walletBalance={walletBalance}
-        pendingSettlements={pendingSettlements}
-        outgoingPendingSettlements={outgoingPendingSettlements}
       />
     </div>
   );

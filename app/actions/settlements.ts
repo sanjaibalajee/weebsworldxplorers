@@ -1,337 +1,404 @@
 "use server";
 
 import { db } from "@/app/db/drizzle";
-import { settlements, expenses, expensePayers, expenseSplits, users, settlementExpenses } from "@/app/db/schema";
-import { eq, desc, or, and, inArray } from "drizzle-orm";
+import { settlements, users, expenses } from "@/app/db/schema";
+import { eq, desc, or, and } from "drizzle-orm";
 import { getCurrentUser } from "./auth";
+import { recordSettlementSent, recordSettlementReceived } from "./wallet";
 
-const EXCHANGE_RATE = 2.4; // 1 THB ≈ 2.4 INR
+/**
+ * SIMPLIFIED SETTLEMENT FLOW:
+ *
+ * - Only the creditor (person who is owed money) can take action
+ * - When they click "Mark as Received", settlement is immediately confirmed
+ * - Debtor's wallet is deducted, Creditor's wallet is credited
+ * - No pending/confirmation flow needed
+ */
 
-type ExpenseSettlement = {
-  expenseId: string;
-  amount: number;
-};
-
-type CreateSettlementInput = {
-  otherUserId: string;
+type MarkAsReceivedInput = {
+  debtorUserId: string;  // The person who owes money (and is paying)
   amountThb: number;
-  amountInr?: number;
-  type: "pay" | "receive"; // "pay" = I'm paying them, "receive" = they're paying me
-  affectsWallet: boolean;
-  expenses: ExpenseSettlement[]; // Which expenses are being settled
+  addToMyWallet: boolean;  // Whether to add to creditor's wallet
 };
 
-export async function createSettlement(input: CreateSettlementInput) {
+export async function markAsReceived(input: MarkAsReceivedInput) {
   const currentUser = await getCurrentUser();
   if (!currentUser) {
     return { success: false, error: "Not authenticated" };
   }
 
-  console.log("=== CREATE SETTLEMENT START ===");
-  console.log("Current user:", currentUser.id, currentUser.name);
-  console.log("Input:", JSON.stringify(input, null, 2));
+  // Get debtor's name first for logging
+  const debtor = await db.query.users.findFirst({
+    where: eq(users.id, input.debtorUserId),
+    columns: { name: true },
+  });
+
+  const logPrefix = `[${currentUser.name}]`;
+
+  console.log("\n" + "=".repeat(60));
+  console.log(`${logPrefix} === MARK AS RECEIVED START ===`);
+  console.log(`${logPrefix} I am: ${currentUser.name} (${currentUser.id})`);
+  console.log(`${logPrefix} Debtor is: ${debtor?.name} (${input.debtorUserId})`);
+  console.log(`${logPrefix} Amount: ฿${input.amountThb}`);
+  console.log(`${logPrefix} Add to my wallet: ${input.addToMyWallet}`);
+  console.log(`${logPrefix} `);
+  console.log(`${logPrefix} MEANING: ${debtor?.name} owes ${currentUser.name} ฿${input.amountThb}`);
+  console.log(`${logPrefix}          ${currentUser.name} is marking this as received (${debtor?.name} paid)`);
+  console.log("=".repeat(60));
 
   try {
-    // Determine payer and receiver based on settlement type
-    const payerId = input.type === "pay" ? currentUser.id : input.otherUserId;
-    const receiverId = input.type === "pay" ? input.otherUserId : currentUser.id;
-
-    console.log("Settlement type:", input.type);
-    console.log("Payer ID:", payerId);
-    console.log("Receiver ID:", receiverId);
-
-    // Store wallet preferences
-    const affectsPayerWallet = input.type === "pay" ? input.affectsWallet.toString() : "true";
-    const affectsReceiverWallet = input.type === "receive" ? input.affectsWallet.toString() : "true";
-
-    console.log("Affects payer wallet:", affectsPayerWallet);
-    console.log("Affects receiver wallet:", affectsReceiverWallet);
-
-    // If type is "receive", the current user IS the receiver confirming receipt
-    // So we can confirm immediately. Only "pay" needs confirmation from the other party.
-    const isPendingConfirmation = input.type === "pay";
-    console.log("Is pending confirmation:", isPendingConfirmation);
-
+    // Create the settlement record (immediately confirmed)
     const [settlement] = await db
       .insert(settlements)
       .values({
-        payerId,
-        receiverId,
+        payerId: input.debtorUserId,        // The debtor is paying
+        receiverId: currentUser.id,          // I (creditor) am receiving
         amountThbEquivalent: input.amountThb.toString(),
-        amountInrPaid: input.amountInr?.toString() || null,
-        status: isPendingConfirmation ? "pending" : "confirmed",
-        affectsPayerWallet,
-        affectsReceiverWallet,
-        confirmedAt: isPendingConfirmation ? null : new Date(),
+        status: "confirmed",                 // Immediately confirmed
+        affectsPayerWallet: "true",          // Always deduct from debtor
+        affectsReceiverWallet: input.addToMyWallet.toString(),
+        confirmedAt: new Date(),
       })
       .returning();
 
-    // Link settlement to specific expenses
-    if (input.expenses && input.expenses.length > 0) {
-      await db.insert(settlementExpenses).values(
-        input.expenses.map((exp) => ({
-          settlementId: settlement.id,
-          expenseId: exp.expenseId,
-          amountThb: exp.amount.toString(),
-        }))
-      );
-    }
+    console.log(`${logPrefix} Settlement CREATED: ${settlement.id}`);
+    console.log(`${logPrefix}   payerId (who paid): ${input.debtorUserId} (${debtor?.name})`);
+    console.log(`${logPrefix}   receiverId (who received): ${currentUser.id} (${currentUser.name})`);
+    console.log(`${logPrefix}   amount: ฿${input.amountThb}`);
 
-    // If confirmed immediately (type === "receive"), record wallet transaction for receiver
-    if (!isPendingConfirmation && input.affectsWallet) {
-      console.log("Recording immediate settlement (type=receive)...");
-      const { recordSettlementReceived } = await import("./wallet");
+    // Deduct from debtor's wallet
+    console.log(`${logPrefix} `);
+    console.log(`${logPrefix} WALLET: Deducting ฿${input.amountThb} from ${debtor?.name}'s wallet...`);
+    await recordSettlementSent(
+      settlement.id,
+      input.amountThb,
+      input.debtorUserId,      // Debtor's wallet
+      currentUser.id,
+      currentUser.name,
+      true                     // Always deduct from debtor
+    );
 
-      // Get payer's name
-      const payer = await db.query.users.findFirst({
-        where: eq(users.id, payerId),
-        columns: { name: true },
-      });
-
-      console.log("Recording settlement received for receiver:", receiverId);
-      // Record for receiver (current user) - they received money
-      const result = await recordSettlementReceived(
+    // Add to my wallet if chosen
+    if (input.addToMyWallet) {
+      console.log(`${logPrefix} WALLET: Adding ฿${input.amountThb} to ${currentUser.name}'s wallet...`);
+      await recordSettlementReceived(
         settlement.id,
         input.amountThb,
-        receiverId, // receiver's wallet (current user)
-        payerId,
-        payer?.name || "Unknown",
+        currentUser.id,        // My wallet
+        input.debtorUserId,
+        debtor?.name || "Unknown",
         true
       );
-      console.log("Settlement received result:", result);
     }
 
-    console.log("=== CREATE SETTLEMENT SUCCESS ===");
+    console.log(`${logPrefix} `);
+    console.log(`${logPrefix} === MARK AS RECEIVED SUCCESS ===`);
+    console.log("=".repeat(60) + "\n");
     return { success: true, settlement };
   } catch (error) {
-    console.error("Error creating settlement:", error);
-    return { success: false, error: "Failed to create settlement" };
+    console.error(`${logPrefix} ERROR:`, error);
+    return { success: false, error: "Failed to mark as received" };
   }
 }
 
-// Confirm a pending settlement (called by receiver)
-export async function confirmSettlement(settlementId: string, affectsMyWallet: boolean) {
+/**
+ * Get detailed balances - simplified version
+ *
+ * For each person, calculate:
+ * - What they owe me from expenses (they're in split, I paid)
+ * - What I owe them from expenses (I'm in split, they paid)
+ * - Minus any settlements between us
+ */
+export async function getDetailedBalances() {
   const currentUser = await getCurrentUser();
   if (!currentUser) {
-    return { success: false, error: "Not authenticated" };
+    return { owedToYou: [], owedByYou: [] };
   }
 
-  console.log("=== CONFIRM SETTLEMENT START ===");
-  console.log("Settlement ID:", settlementId);
-  console.log("Current user (confirming):", currentUser.id, currentUser.name);
-  console.log("Affects my wallet:", affectsMyWallet);
+  const logPrefix = `[${currentUser.name}]`;
+
+  console.log("\n" + "=".repeat(70));
+  console.log(`${logPrefix} === GET DETAILED BALANCES ===`);
+  console.log(`${logPrefix} Logged in as: ${currentUser.name} (${currentUser.id})`);
+  console.log("=".repeat(70));
 
   try {
-    // Get the settlement
-    const settlement = await db.query.settlements.findFirst({
-      where: eq(settlements.id, settlementId),
+    // Get all users
+    const allUsers = await db.select({ id: users.id, name: users.name }).from(users);
+    const userMap = new Map(allUsers.map((u) => [u.id, u.name]));
+
+    // Get all group expenses with payers and splits
+    const groupExpenses = await db.query.expenses.findMany({
+      where: eq(expenses.type, "group"),
       with: {
-        payer: { columns: { id: true, name: true } },
-        receiver: { columns: { id: true, name: true } },
+        payers: {
+          with: {
+            user: { columns: { id: true, name: true } },
+          },
+        },
+        splits: {
+          with: {
+            user: { columns: { id: true, name: true } },
+          },
+        },
       },
     });
 
-    if (!settlement) {
-      console.log("ERROR: Settlement not found");
-      return { success: false, error: "Settlement not found" };
+    console.log(`${logPrefix} Group expenses found: ${groupExpenses.length}`);
+
+    // Calculate balance per person from expenses
+    // Key: other user ID, Value: amount (positive = they owe me, negative = I owe them)
+    const expenseBalances = new Map<string, {
+      amount: number;
+      expenses: { id: string; title: string; amount: number; date: string; paidBy: string }[]
+    }>();
+
+    // Initialize for all users
+    for (const user of allUsers) {
+      if (user.id !== currentUser.id) {
+        expenseBalances.set(user.id, { amount: 0, expenses: [] });
+      }
     }
 
-    console.log("Settlement found:", {
-      id: settlement.id,
-      payerId: settlement.payerId,
-      payerName: settlement.payer?.name,
-      receiverId: settlement.receiverId,
-      receiverName: settlement.receiver?.name,
-      amount: settlement.amountThbEquivalent,
-      status: settlement.status,
-      affectsPayerWallet: settlement.affectsPayerWallet,
-      affectsReceiverWallet: settlement.affectsReceiverWallet,
-    });
+    console.log(`${logPrefix}`);
+    console.log(`${logPrefix} --- EXPENSE CALCULATIONS ---`);
 
-    // Only the receiver can confirm
-    if (settlement.receiverId !== currentUser.id) {
-      console.log("ERROR: Current user is not the receiver");
-      return { success: false, error: "Only the receiver can confirm this settlement" };
+    for (const expense of groupExpenses) {
+      const totalAmount = parseFloat(expense.totalAmountThb);
+      const primaryPayer = expense.payers[0];
+      const paidByName = primaryPayer?.user?.name || "Unknown";
+
+      // Calculate net contribution for each person
+      // Net = what they paid - what they owe
+      // Positive = they overpaid (others owe them)
+      // Negative = they underpaid (they owe others)
+      const netContributions = new Map<string, number>();
+
+      // First, add all people in splits with their owed amounts
+      for (const split of expense.splits) {
+        if (!split.userId) continue;
+        const owed = parseFloat(split.owedAmountThb);
+        netContributions.set(split.userId, -owed); // Start with negative (they owe)
+      }
+
+      // Then, add what each payer paid (including payers not in splits)
+      for (const payer of expense.payers) {
+        if (!payer.userId) continue;
+        const paid = parseFloat(payer.cashGiven || "0") - parseFloat(payer.changeTaken || "0");
+        const currentNet = netContributions.get(payer.userId) || 0;
+        netContributions.set(payer.userId, currentNet + paid); // Add what they paid
+      }
+
+      // Check if current user is involved (either in split or as payer)
+      const myNet = netContributions.get(currentUser.id) || 0;
+
+      // Log all participants for debugging
+      const amInSplit = expense.splits.some(s => s.userId === currentUser.id);
+      const amPayer = expense.payers.some(p => p.userId === currentUser.id);
+      if (amInSplit || amPayer) {
+        console.log(`${logPrefix} Expense: "${expense.title}" - I am ${amPayer ? 'PAYER' : ''}${amPayer && amInSplit ? ' + ' : ''}${amInSplit ? 'IN SPLIT' : ''}`);
+        console.log(`${logPrefix}   All participants: ${Array.from(netContributions.entries()).map(([id, net]) => `${userMap.get(id)}=${net.toFixed(0)}`).join(', ')}`);
+      }
+
+      if (Math.abs(myNet) < 0.01) continue; // I'm square
+
+      // Calculate total overpaid
+      let totalOverpaid = 0;
+      for (const [, net] of netContributions) {
+        if (net > 0) totalOverpaid += net;
+      }
+
+      console.log(`${logPrefix} Expense: "${expense.title}" (paid by ${paidByName})`);
+      console.log(`${logPrefix}   My net: ${myNet > 0 ? '+' : ''}${myNet.toFixed(2)} (${myNet > 0 ? 'I overpaid' : 'I underpaid'})`);
+
+      // For each other person in the expense (including payers not in splits)
+      for (const [otherUserId, theirNet] of netContributions) {
+        if (otherUserId === currentUser.id) continue;
+
+        let balanceChange = 0;
+
+        if (myNet > 0 && theirNet < 0) {
+          // I overpaid, they underpaid - they owe me
+          if (totalOverpaid > 0) {
+            balanceChange = Math.abs(theirNet) * (myNet / totalOverpaid);
+          }
+        } else if (myNet < 0 && theirNet > 0) {
+          // I underpaid, they overpaid - I owe them
+          if (totalOverpaid > 0) {
+            balanceChange = -(Math.abs(myNet) * (theirNet / totalOverpaid));
+          }
+        }
+
+        if (Math.abs(balanceChange) >= 0.5) {
+          const details = expenseBalances.get(otherUserId);
+          if (details) {
+            details.amount += balanceChange;
+            details.expenses.push({
+              id: expense.id,
+              title: expense.title,
+              amount: Math.round(balanceChange),
+              date: expense.expenseDate || "",
+              paidBy: paidByName,
+            });
+            console.log(`${logPrefix}   → ${userMap.get(otherUserId)}: ${balanceChange > 0 ? 'they owe me' : 'I owe them'} ฿${Math.abs(balanceChange).toFixed(2)}`);
+          }
+        }
+      }
     }
 
-    if (settlement.status !== "pending") {
-      console.log("ERROR: Settlement is not pending, status:", settlement.status);
-      return { success: false, error: `Settlement is not pending (current status: ${settlement.status})` };
+    // IMPORTANT: Round expense balances BEFORE applying settlements
+    // This ensures that when we settle for ฿60 (the displayed amount),
+    // it matches the rounded expense debt of ฿60 (not raw ฿59.50)
+    console.log(`${logPrefix}`);
+    console.log(`${logPrefix} --- EXPENSE TOTALS (before rounding) ---`);
+    for (const [userId, details] of expenseBalances) {
+      if (Math.abs(details.amount) >= 0.5) {
+        const name = userMap.get(userId);
+        const rawAmount = details.amount;
+        // Round to nearest integer (same logic used for display)
+        const rounded = rawAmount >= 0
+          ? Math.floor(rawAmount + 0.5)
+          : -Math.floor(Math.abs(rawAmount) + 0.5);
+
+        console.log(`${logPrefix}   ${name}: raw ${rawAmount.toFixed(2)} → rounded ${rounded}`);
+
+        // Update the balance to the rounded value
+        details.amount = rounded;
+      }
     }
 
-    const amount = parseFloat(settlement.amountThbEquivalent);
-    const payerWallet = settlement.affectsPayerWallet === "true";
-    const receiverWallet = affectsMyWallet;
-
-    console.log("Amount:", amount);
-    console.log("Payer wallet affected:", payerWallet);
-    console.log("Receiver wallet affected:", receiverWallet);
-
-    // Import wallet functions
-    const { recordSettlementSent, recordSettlementReceived } = await import("./wallet");
-
-    // Record wallet transactions
-    // Payer's wallet: deduct the amount they paid
-    if (payerWallet && settlement.payerId) {
-      console.log("Recording settlement SENT for payer:", settlement.payerId);
-      const sentResult = await recordSettlementSent(
-        settlement.id,
-        amount,
-        settlement.payerId, // payer's wallet
-        settlement.receiverId!,
-        settlement.receiver?.name || "Unknown",
-        true
-      );
-      console.log("Settlement sent result:", sentResult);
-    } else {
-      console.log("Skipping payer wallet (payerWallet:", payerWallet, ", payerId:", settlement.payerId, ")");
+    console.log(`${logPrefix}`);
+    console.log(`${logPrefix} --- EXPENSE TOTALS (after rounding, before settlements) ---`);
+    for (const [userId, details] of expenseBalances) {
+      if (Math.abs(details.amount) >= 1) {
+        const name = userMap.get(userId);
+        if (details.amount > 0) {
+          console.log(`${logPrefix}   ${name} owes me: ฿${details.amount}`);
+        } else {
+          console.log(`${logPrefix}   I owe ${name}: ฿${Math.abs(details.amount)}`);
+        }
+      }
     }
 
-    // Receiver's wallet: add the amount they received
-    if (receiverWallet && settlement.receiverId) {
-      console.log("Recording settlement RECEIVED for receiver:", settlement.receiverId);
-      const receivedResult = await recordSettlementReceived(
-        settlement.id,
-        amount,
-        settlement.receiverId, // receiver's wallet
-        settlement.payerId!,
-        settlement.payer?.name || "Unknown",
-        true
-      );
-      console.log("Settlement received result:", receivedResult);
-    } else {
-      console.log("Skipping receiver wallet (receiverWallet:", receiverWallet, ", receiverId:", settlement.receiverId, ")");
-    }
-
-    // Update settlement status
-    console.log("Updating settlement status to confirmed...");
-    await db
-      .update(settlements)
-      .set({
-        status: "confirmed",
-        affectsReceiverWallet: affectsMyWallet.toString(),
-        confirmedAt: new Date(),
-      })
-      .where(eq(settlements.id, settlementId));
-
-    console.log("=== CONFIRM SETTLEMENT SUCCESS ===");
-    return { success: true };
-  } catch (error) {
-    console.error("Error confirming settlement:", error);
-    return { success: false, error: "Failed to confirm settlement" };
-  }
-}
-
-// Reject a pending settlement (called by receiver)
-export async function rejectSettlement(settlementId: string) {
-  const currentUser = await getCurrentUser();
-  if (!currentUser) {
-    return { success: false, error: "Not authenticated" };
-  }
-
-  try {
-    const settlement = await db.query.settlements.findFirst({
-      where: eq(settlements.id, settlementId),
-    });
-
-    if (!settlement) {
-      return { success: false, error: "Settlement not found" };
-    }
-
-    // Only the receiver can reject
-    if (settlement.receiverId !== currentUser.id) {
-      return { success: false, error: "Only the receiver can reject this settlement" };
-    }
-
-    if (settlement.status !== "pending") {
-      return { success: false, error: "Settlement is not pending" };
-    }
-
-    // Delete the settlement
-    await db.delete(settlements).where(eq(settlements.id, settlementId));
-
-    return { success: true };
-  } catch (error) {
-    console.error("Error rejecting settlement:", error);
-    return { success: false, error: "Failed to reject settlement" };
-  }
-}
-
-// Get pending settlements for current user (as receiver - needs confirmation)
-export async function getPendingSettlements() {
-  const currentUser = await getCurrentUser();
-  if (!currentUser) {
-    return [];
-  }
-
-  try {
-    const pending = await db.query.settlements.findMany({
+    // Get all confirmed settlements between me and others
+    const confirmedSettlements = await db.query.settlements.findMany({
       where: and(
-        eq(settlements.receiverId, currentUser.id),
-        eq(settlements.status, "pending")
+        or(
+          eq(settlements.payerId, currentUser.id),
+          eq(settlements.receiverId, currentUser.id)
+        ),
+        eq(settlements.status, "confirmed")
       ),
       orderBy: [desc(settlements.createdAt)],
-      with: {
-        payer: { columns: { id: true, name: true } },
-        receiver: { columns: { id: true, name: true } },
-      },
     });
 
-    console.log("getPendingSettlements found:", pending.length, "settlements for user", currentUser.id);
-    pending.forEach(s => console.log("  - Settlement", s.id, "status:", s.status));
+    console.log(`${logPrefix}`);
+    console.log(`${logPrefix} --- SETTLEMENTS (${confirmedSettlements.length} found) ---`);
 
-    return pending.map((s) => ({
-      id: s.id,
-      amount: parseFloat(s.amountThbEquivalent),
-      amountInr: s.amountInrPaid ? parseFloat(s.amountInrPaid) : null,
-      payerId: s.payerId,
-      payerName: s.payer?.name || "Unknown",
-      receiverId: s.receiverId,
-      receiverName: s.receiver?.name || "Unknown",
-      date: s.createdAt?.toISOString() || "",
-    }));
+    // Apply settlements to balances
+    for (const settlement of confirmedSettlements) {
+      const amount = parseFloat(settlement.amountThbEquivalent);
+      const otherUserId = settlement.payerId === currentUser.id
+        ? settlement.receiverId
+        : settlement.payerId;
+
+      if (!otherUserId) continue;
+
+      const details = expenseBalances.get(otherUserId);
+      if (!details) continue;
+
+      const otherName = userMap.get(otherUserId);
+      const payerName = userMap.get(settlement.payerId || "");
+      const receiverName = userMap.get(settlement.receiverId || "");
+      const balanceBefore = details.amount;
+
+      if (settlement.receiverId === currentUser.id) {
+        // They paid me (I am the receiver)
+        details.amount -= amount;
+        console.log(`${logPrefix}   Settlement ${settlement.id.slice(0,8)}:`);
+        console.log(`${logPrefix}     ${payerName} → ${receiverName} (me): ฿${amount}`);
+        console.log(`${logPrefix}     "${otherName} paid me" → balance: ${balanceBefore.toFixed(2)} - ${amount} = ${details.amount.toFixed(2)}`);
+      } else {
+        // I paid them (I am the payer)
+        details.amount += amount;
+        console.log(`${logPrefix}   Settlement ${settlement.id.slice(0,8)}:`);
+        console.log(`${logPrefix}     ${payerName} (me) → ${receiverName}: ฿${amount}`);
+        console.log(`${logPrefix}     "I paid ${otherName}" → balance: ${balanceBefore.toFixed(2)} + ${amount} = ${details.amount.toFixed(2)}`);
+      }
+    }
+
+    // Build result arrays
+    type PersonBalance = {
+      userId: string;
+      name: string;
+      netAmount: number;
+      expenses: { id: string; title: string; amount: number; total: number; date: string; paidBy: string }[];
+    };
+
+    const owedToYou: PersonBalance[] = [];
+    const owedByYou: PersonBalance[] = [];
+
+    for (const [userId, details] of expenseBalances) {
+      // Use Math.floor for consistent rounding (always round down the absolute value)
+      // This ensures both parties see the same number
+      const roundedAmount = details.amount >= 0
+        ? Math.floor(details.amount + 0.5)  // Round 59.5 → 60
+        : -Math.floor(Math.abs(details.amount) + 0.5);  // Round -59.5 → -60
+
+      if (Math.abs(roundedAmount) < 1) continue;
+
+      console.log(`${logPrefix} Rounding ${userMap.get(userId)}: ${details.amount.toFixed(2)} → ${roundedAmount}`);
+
+      const person: PersonBalance = {
+        userId,
+        name: userMap.get(userId) || "Unknown",
+        netAmount: Math.abs(roundedAmount),
+        expenses: details.expenses.map(e => ({
+          ...e,
+          amount: Math.abs(e.amount),
+          total: 0,
+        })),
+      };
+
+      if (roundedAmount > 0) {
+        owedToYou.push(person);
+      } else {
+        owedByYou.push(person);
+      }
+    }
+
+    // Sort by amount descending
+    owedToYou.sort((a, b) => b.netAmount - a.netAmount);
+    owedByYou.sort((a, b) => b.netAmount - a.netAmount);
+
+    console.log(`${logPrefix}`);
+    console.log(`${logPrefix} === FINAL BALANCES FOR ${currentUser.name.toUpperCase()} ===`);
+    if (owedToYou.length > 0) {
+      console.log(`${logPrefix} Owed TO me:`);
+      for (const p of owedToYou) {
+        console.log(`${logPrefix}   ${p.name} owes me ฿${p.netAmount}`);
+      }
+    } else {
+      console.log(`${logPrefix} Owed TO me: (none)`);
+    }
+    if (owedByYou.length > 0) {
+      console.log(`${logPrefix} Owed BY me:`);
+      for (const p of owedByYou) {
+        console.log(`${logPrefix}   I owe ${p.name} ฿${p.netAmount}`);
+      }
+    } else {
+      console.log(`${logPrefix} Owed BY me: (none)`);
+    }
+    console.log("=".repeat(70) + "\n");
+
+    return { owedToYou, owedByYou };
   } catch (error) {
-    console.error("Error fetching pending settlements:", error);
-    return [];
+    console.error(`${logPrefix} ERROR:`, error);
+    return { owedToYou: [], owedByYou: [] };
   }
 }
 
-// Get outgoing pending settlements (current user is payer, waiting for receiver to confirm)
-export async function getOutgoingPendingSettlements() {
-  const currentUser = await getCurrentUser();
-  if (!currentUser) {
-    return [];
-  }
-
-  try {
-    const pending = await db.query.settlements.findMany({
-      where: and(
-        eq(settlements.payerId, currentUser.id),
-        eq(settlements.status, "pending")
-      ),
-      orderBy: [desc(settlements.createdAt)],
-      with: {
-        payer: { columns: { id: true, name: true } },
-        receiver: { columns: { id: true, name: true } },
-      },
-    });
-
-    return pending.map((s) => ({
-      id: s.id,
-      amount: parseFloat(s.amountThbEquivalent),
-      amountInr: s.amountInrPaid ? parseFloat(s.amountInrPaid) : null,
-      payerId: s.payerId,
-      payerName: s.payer?.name || "Unknown",
-      receiverId: s.receiverId,
-      receiverName: s.receiver?.name || "Unknown",
-      date: s.createdAt?.toISOString() || "",
-    }));
-  } catch (error) {
-    console.error("Error fetching outgoing pending settlements:", error);
-    return [];
-  }
-}
-
+// Keep getSettlements for history if needed
 export async function getSettlements() {
   const currentUser = await getCurrentUser();
   if (!currentUser) {
@@ -368,297 +435,5 @@ export async function getSettlements() {
   } catch (error) {
     console.error("Error fetching settlements:", error);
     return [];
-  }
-}
-
-type PersonBalance = {
-  userId: string;
-  name: string;
-  netAmount: number;
-  expenses: {
-    id: string;
-    title: string;
-    amount: number;
-    total: number;
-    date: string;
-    paidBy: string;
-  }[];
-};
-
-export async function getDetailedBalances() {
-  const currentUser = await getCurrentUser();
-  if (!currentUser) {
-    return { owedToYou: [], owedByYou: [] };
-  }
-
-  console.log("=== GET DETAILED BALANCES ===");
-  console.log("Current user:", currentUser.id, currentUser.name);
-
-  try {
-    // Get all users
-    const allUsers = await db.select({ id: users.id, name: users.name }).from(users);
-    const userMap = new Map(allUsers.map((u) => [u.id, u.name]));
-
-    // Get all CONFIRMED settlements involving current user with their linked expenses
-    const confirmedSettlements = await db.query.settlements.findMany({
-      where: and(
-        or(
-          eq(settlements.payerId, currentUser.id),
-          eq(settlements.receiverId, currentUser.id)
-        ),
-        eq(settlements.status, "confirmed")
-      ),
-      with: {
-        settlementExpenses: true,
-      },
-    });
-
-    console.log("Confirmed settlements found:", confirmedSettlements.length);
-    for (const s of confirmedSettlements) {
-      console.log("  Settlement:", s.id);
-      console.log("    Payer:", s.payerId, "-> Receiver:", s.receiverId);
-      console.log("    Amount:", s.amountThbEquivalent);
-      console.log("    Linked expenses:", s.settlementExpenses?.length || 0);
-      if (s.settlementExpenses) {
-        for (const se of s.settlementExpenses) {
-          console.log("      - Expense:", se.expenseId, "Amount:", se.amountThb);
-        }
-      }
-    }
-
-    // Build a set of settled expense IDs per person
-    // Key: `${expenseId}-${otherUserId}`, Value: amount settled
-    const settledExpenseAmounts = new Map<string, number>();
-
-    for (const settlement of confirmedSettlements) {
-      const otherUserId = settlement.payerId === currentUser.id
-        ? settlement.receiverId
-        : settlement.payerId;
-
-      if (!otherUserId) continue;
-
-      // If settlement has linked expenses, track them specifically
-      if (settlement.settlementExpenses && settlement.settlementExpenses.length > 0) {
-        for (const se of settlement.settlementExpenses) {
-          const key = `${se.expenseId}-${otherUserId}`;
-          const current = settledExpenseAmounts.get(key) || 0;
-          settledExpenseAmounts.set(key, current + parseFloat(se.amountThb));
-        }
-      }
-    }
-
-    console.log("Settled expense amounts map:");
-    for (const [key, amount] of settledExpenseAmounts) {
-      console.log("  ", key, "=", amount);
-    }
-
-    // Get all group expenses with payers and splits
-    const groupExpenses = await db.query.expenses.findMany({
-      with: {
-        payers: {
-          with: {
-            user: { columns: { id: true, name: true } },
-          },
-        },
-        splits: {
-          with: {
-            user: { columns: { id: true, name: true } },
-          },
-        },
-      },
-    });
-
-    // Filter to only group expenses (exclude pot and individual - they don't create owe relationships)
-    const filteredExpenses = groupExpenses.filter((e) => e.type === "group");
-    console.log("Group expenses found (excluding pot/individual):", filteredExpenses.length);
-
-    // Track balance and expense details per person relative to current user
-    const balanceDetails = new Map<
-      string,
-      {
-        netAmount: number;
-        expenses: {
-          id: string;
-          title: string;
-          amount: number;
-          total: number;
-          date: string;
-          paidBy: string;
-          isSettled: boolean;
-        }[];
-      }
-    >();
-
-    // Initialize for all users except current
-    for (const user of allUsers) {
-      if (user.id !== currentUser.id) {
-        balanceDetails.set(user.id, { netAmount: 0, expenses: [] });
-      }
-    }
-
-    // Process each expense
-    for (const expense of filteredExpenses) {
-      const primaryPayer = expense.payers[0];
-      const paidByName = primaryPayer?.user?.name || "Unknown";
-      const totalAmount = parseFloat(expense.totalAmountThb);
-
-      console.log("\nProcessing expense:", expense.id, expense.title);
-      console.log("  Total:", totalAmount, "Paid by:", paidByName);
-
-      // Calculate net contribution for each person in this expense
-      const netContributions = new Map<string, number>();
-
-      for (const split of expense.splits) {
-        if (!split.userId) continue;
-        const payer = expense.payers.find((p) => p.userId === split.userId);
-        const paid = payer
-          ? parseFloat(payer.cashGiven || "0") - parseFloat(payer.changeTaken || "0")
-          : 0;
-        const owed = parseFloat(split.owedAmountThb);
-        netContributions.set(split.userId, paid - owed);
-        console.log("  User:", split.userId, userMap.get(split.userId), "paid:", paid, "owed:", owed, "net:", paid - owed);
-      }
-
-      // Get my net contribution
-      const myNet = netContributions.get(currentUser.id) || 0;
-      console.log("  My net contribution:", myNet);
-      if (Math.abs(myNet) < 0.01) {
-        console.log("  Skipping - I'm square for this expense");
-        continue;
-      }
-
-      // Calculate total overpaid for proportional distribution
-      let totalOverpaid = 0;
-      for (const [, net] of netContributions) {
-        if (net > 0) totalOverpaid += net;
-      }
-
-      // For each other person, calculate what they owe me (or I owe them)
-      for (const split of expense.splits) {
-        if (!split.userId || split.userId === currentUser.id) continue;
-
-        const theirNet = netContributions.get(split.userId) || 0;
-        let balanceChange = 0;
-
-        if (myNet > 0 && theirNet < 0) {
-          if (totalOverpaid > 0) {
-            balanceChange = Math.abs(theirNet) * (myNet / totalOverpaid);
-          }
-        } else if (myNet < 0 && theirNet > 0) {
-          if (totalOverpaid > 0) {
-            balanceChange = -(Math.abs(myNet) * (theirNet / totalOverpaid));
-          }
-        }
-
-        if (Math.abs(balanceChange) >= 0.5) {
-          const details = balanceDetails.get(split.userId)!;
-
-          // Check if this expense has been settled with this person
-          const settledKey = `${expense.id}-${split.userId}`;
-          const settledAmount = settledExpenseAmounts.get(settledKey) || 0;
-
-          // Calculate remaining amount correctly:
-          // - If balanceChange > 0 (they owe me), subtract settled amount
-          // - If balanceChange < 0 (I owe them), add settled amount (reduces my debt)
-          const roundedBalance = Math.round(balanceChange);
-          const remainingAmount = balanceChange > 0
-            ? roundedBalance - settledAmount  // they owe me, subtract what they paid
-            : roundedBalance + settledAmount; // I owe them, add what I paid (reduces debt)
-          const isFullySettled = Math.abs(remainingAmount) < 1;
-
-          console.log("  With user:", split.userId, userMap.get(split.userId));
-          console.log("    Balance change:", balanceChange, "(", balanceChange > 0 ? "they owe me" : "I owe them", ")");
-          console.log("    Settled key:", settledKey);
-          console.log("    Settled amount:", settledAmount);
-          console.log("    Remaining amount:", remainingAmount);
-          console.log("    Is fully settled:", isFullySettled);
-
-          // Add to net amount (unsettled portion only)
-          if (!isFullySettled) {
-            details.netAmount += remainingAmount;
-            details.expenses.push({
-              id: expense.id,
-              title: expense.title,
-              amount: remainingAmount,
-              total: totalAmount,
-              date: expense.expenseDate || "",
-              paidBy: paidByName,
-              isSettled: false,
-            });
-            console.log("    -> Added to unsettled expenses");
-          } else {
-            console.log("    -> Expense is fully settled, not adding");
-          }
-        }
-      }
-    }
-
-    // Separate into owed to you vs owed by you
-    const owedToYou: PersonBalance[] = [];
-    const owedByYou: PersonBalance[] = [];
-
-    for (const [userId, details] of balanceDetails) {
-      if (Math.abs(details.netAmount) < 1) continue;
-
-      // Only show unsettled expenses
-      const unsettledExpenses = details.expenses.filter(e => !e.isSettled);
-
-      // For expenses, keep the sign relative to the overall relationship:
-      // - In "owedToYou": positive amount = they owe you more, negative = reduces what they owe
-      // - In "owedByYou": positive amount = you owe them more, negative = reduces what you owe
-      // Since details.netAmount determines the category, we need to flip signs for owedByYou
-      const isOwedToYou = details.netAmount > 0;
-
-      const person: PersonBalance = {
-        userId,
-        name: userMap.get(userId) || "Unknown",
-        netAmount: Math.round(Math.abs(details.netAmount)),
-        expenses: unsettledExpenses.map(e => ({
-          id: e.id,
-          title: e.title,
-          // For owedByYou, flip the sign so positive = increases debt, negative = reduces debt
-          // e.amount is positive when they owe me, negative when I owe them
-          // In owedByYou context: if e.amount > 0 (they owe me), it REDUCES my debt (show negative)
-          // In owedByYou context: if e.amount < 0 (I owe them), it INCREASES my debt (show positive)
-          amount: isOwedToYou ? Math.abs(e.amount) : -e.amount,
-          total: e.total,
-          date: e.date,
-          paidBy: e.paidBy,
-        })),
-      };
-
-      if (details.netAmount > 0) {
-        owedToYou.push(person);
-      } else {
-        owedByYou.push(person);
-      }
-    }
-
-    // Sort by amount descending
-    owedToYou.sort((a, b) => b.netAmount - a.netAmount);
-    owedByYou.sort((a, b) => b.netAmount - a.netAmount);
-
-    console.log("\n=== FINAL BALANCES ===");
-    console.log("Owed TO you:");
-    for (const p of owedToYou) {
-      console.log("  ", p.name, "owes you", p.netAmount);
-      for (const e of p.expenses) {
-        console.log("    - Expense:", e.id, e.title, "Amount:", e.amount > 0 ? `+${e.amount}` : e.amount);
-      }
-    }
-    console.log("Owed BY you:");
-    for (const p of owedByYou) {
-      console.log("  You owe", p.name, p.netAmount);
-      for (const e of p.expenses) {
-        // Positive = increases your debt, Negative = reduces your debt (they owe you for this one)
-        console.log("    - Expense:", e.id, e.title, "Amount:", e.amount > 0 ? `+${e.amount}` : e.amount, e.amount < 0 ? "(reduces debt)" : "");
-      }
-    }
-    console.log("=== END DETAILED BALANCES ===\n");
-
-    return { owedToYou, owedByYou };
-  } catch (error) {
-    console.error("Error fetching detailed balances:", error);
-    return { owedToYou: [], owedByYou: [] };
   }
 }

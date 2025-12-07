@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { ArrowUpRight, ArrowDownLeft, ChevronDown, ChevronUp, ExternalLink } from "lucide-react";
+import { ArrowDownLeft, ChevronDown, ChevronUp, ExternalLink } from "lucide-react";
 
 type Expense = {
   id: string;
@@ -103,9 +103,6 @@ export function BalanceCard({
           <div className="space-y-1">
             {person.expenses.map((expense) => {
               const displayAmount = Math.abs(expense.amount);
-              // For "owedByYou" cards: positive = increases debt, negative = reduces debt
-              // For "owedToYou" cards: all amounts are positive (they owe you)
-              const isReducingDebt = !owesYou && expense.amount < 0;
               return (
                 <button
                   key={expense.id}
@@ -119,71 +116,68 @@ export function BalanceCard({
                     </div>
                     <p className="text-[10px] text-muted-foreground">
                       {expense.date} • Paid by {expense.paidBy}
-                      {isReducingDebt && " • reduces debt"}
                     </p>
                   </div>
                   <p
                     className={`text-sm font-semibold ml-3 ${
-                      isReducingDebt
+                      owesYou
                         ? "text-green-600 dark:text-green-400"
-                        : owesYou
-                          ? "text-green-600 dark:text-green-400"
-                          : "text-red-600 dark:text-red-400"
+                        : "text-red-600 dark:text-red-400"
                     }`}
                   >
-                    {isReducingDebt ? "+" : owesYou ? "+" : "-"}฿{displayAmount.toLocaleString()}
+                    {owesYou ? "+" : "-"}฿{displayAmount.toLocaleString()}
                   </p>
                 </button>
               );
             })}
           </div>
 
-          {/* Action Button */}
+          {/* Action Button - Only show for people who owe you */}
+          {owesYou && (
+            <Button
+              size="sm"
+              variant="default"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSettle();
+              }}
+              className="w-full h-10 text-sm gap-1.5"
+            >
+              <ArrowDownLeft className="w-4 h-4" />
+              Mark as Received
+            </Button>
+          )}
+
+          {/* Info text for people you owe */}
+          {!owesYou && (
+            <p className="text-xs text-muted-foreground text-center py-2">
+              {person.name} will mark as received when you pay them
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Action Button when not expanded - Only for people who owe you */}
+      {!isExpanded && owesYou && (
+        <div className="px-4 pb-4">
           <Button
             size="sm"
-            variant={owesYou ? "default" : "destructive"}
-            onClick={(e) => {
-              e.stopPropagation();
-              onSettle();
-            }}
+            variant="default"
+            onClick={onSettle}
             className="w-full h-10 text-sm gap-1.5"
           >
-            {owesYou ? (
-              <>
-                <ArrowDownLeft className="w-4 h-4" />
-                Mark as Received
-              </>
-            ) : (
-              <>
-                <ArrowUpRight className="w-4 h-4" />
-                Pay {person.name}
-              </>
-            )}
+            <ArrowDownLeft className="w-4 h-4" />
+            Mark as Received
           </Button>
         </div>
       )}
 
-      {/* Action Button when not expanded */}
-      {!isExpanded && (
+      {/* Info text when not expanded for people you owe */}
+      {!isExpanded && !owesYou && (
         <div className="px-4 pb-4">
-          <Button
-            size="sm"
-            variant={owesYou ? "default" : "destructive"}
-            onClick={onSettle}
-            className="w-full h-10 text-sm gap-1.5"
-          >
-            {owesYou ? (
-              <>
-                <ArrowDownLeft className="w-4 h-4" />
-                Mark as Received
-              </>
-            ) : (
-              <>
-                <ArrowUpRight className="w-4 h-4" />
-                Pay {person.name}
-              </>
-            )}
-          </Button>
+          <p className="text-xs text-muted-foreground text-center py-2">
+            {person.name} will mark as received when you pay them
+          </p>
         </div>
       )}
     </div>
